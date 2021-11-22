@@ -20,12 +20,10 @@
 
 #include "daemon_config.h"
 #include "daemon_rpc.h"
+#include "vm_specs.h"
 
 #include <multipass/delayed_shutdown_timer.h>
-#include <multipass/id_mappings.h>
-#include <multipass/memory_size.h>
 #include <multipass/metrics_provider.h>
-#include <multipass/network_interface.h>
 #include <multipass/sshfs_mount/sshfs_mounts.h>
 #include <multipass/virtual_machine.h>
 #include <multipass/vm_status_monitor.h>
@@ -42,27 +40,6 @@
 
 namespace multipass
 {
-struct VMMount
-{
-    std::string source_path;
-    id_mappings gid_mappings;
-    id_mappings uid_mappings;
-};
-
-struct VMSpecs
-{
-    int num_cores;
-    MemorySize mem_size;
-    MemorySize disk_space;
-    std::string default_mac_address;
-    std::vector<NetworkInterface> extra_interfaces; // We want interfaces to be ordered.
-    std::string ssh_username;
-    VirtualMachine::State state;
-    std::unordered_map<std::string, VMMount> mounts;
-    bool deleted;
-    QJsonObject metadata;
-};
-
 struct MetricsOptInData
 {
     OptInStatus::Status opt_in_status;
