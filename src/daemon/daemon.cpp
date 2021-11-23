@@ -915,10 +915,11 @@ mp::SettingsHandler*
 register_instance_mod(std::unordered_map<std::string, mp::VMSpecs>& vm_instance_specs,
                       std::unordered_map<std::string, mp::VirtualMachine::ShPtr>& vm_instances,
                       const std::unordered_map<std::string, mp::VirtualMachine::ShPtr>& deleted_instances,
-                      const std::unordered_set<std::string>& preparing_instances)
+                      const std::unordered_set<std::string>& preparing_instances,
+                      std::function<void()> instance_persister)
 {
     return MP_SETTINGS.register_handler(std::make_unique<mp::InstanceSettingsHandler>(
-        vm_instance_specs, vm_instances, deleted_instances, preparing_instances));
+        vm_instance_specs, vm_instances, deleted_instances, preparing_instances, std::move(instance_persister)));
 }
 
 } // namespace
@@ -933,8 +934,8 @@ mp::Daemon::Daemon(std::unique_ptr<const DaemonConfig> the_config)
                        config->data_directory},
       metrics_opt_in{get_metrics_opt_in(config->data_directory)},
       instance_mounts{*config->ssh_key_provider},
-      instance_mod_handler{
-          register_instance_mod(vm_instance_specs, vm_instances, deleted_instances, preparing_instances)}
+      instance_mod_handler{register_instance_mod(vm_instance_specs, vm_instances, deleted_instances,
+                                                 preparing_instances, [this] { persist_instances(); })}
 {
     connect_rpc(daemon_rpc, *this);
     std::vector<std::string> invalid_specs;
