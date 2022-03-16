@@ -19,6 +19,7 @@
 #define MULTIPASS_CONSTANTS_H
 
 #include <chrono>
+#include <initializer_list>
 
 using namespace std::chrono_literals;
 
@@ -55,6 +56,9 @@ constexpr auto mounts_key = "local.privileged-mounts"; // idem
 constexpr auto autostart_key = "client.gui.autostart"; // idem
 constexpr auto winterm_key = "client.apps.windows-terminal.profiles"; // idem
 constexpr auto hotkey_key = "client.gui.hotkey";                      // idem
+
+[[maybe_unused]] // hands off clang-format
+constexpr auto key_examples = {autostart_key, driver_key, mounts_key};
 
 constexpr auto bridged_interface_default = "bridged";
 constexpr auto petenv_default = "primary";
