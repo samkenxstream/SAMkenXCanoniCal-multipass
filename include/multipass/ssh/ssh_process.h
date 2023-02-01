@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,12 +18,11 @@
 #ifndef MULTIPASS_SSH_PROCESS_H
 #define MULTIPASS_SSH_PROCESS_H
 
-#include <multipass/optional.h>
-
 #include <libssh/libssh.h>
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace multipass
@@ -52,9 +51,9 @@ private:
     ssh_session session;
     const std::string cmd;
     ChannelUPtr channel;
-    optional<int> exit_status;
+    std::optional<int> exit_status;
 
     friend class SftpServer;
 };
-}
+} // namespace multipass
 #endif // MULTIPASS_SSH_PROCESS_H

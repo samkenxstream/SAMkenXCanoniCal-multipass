@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -66,8 +66,6 @@ enum class TimeoutAction
 
 // filesystem and path helpers
 QDir base_dir(const QString& path);
-Path make_dir(const QDir& a_dir, const QString& name, const QFileDevice::Permissions permissions = 0);
-Path make_dir(const QDir& dir, const QFileDevice::Permissions permissions = 0);
 bool is_dir(const std::string& path);
 QString backend_directory_path(const Path& path, const QString& subdirectory);
 std::string filename_for(const std::string& path);
@@ -75,6 +73,12 @@ std::string contents_of(const multipass::Path& file_path);
 bool invalid_target_path(const QString& target_path);
 QTemporaryFile create_temp_file_with_path(const QString& filename_template);
 void remove_directories(const std::vector<QString>& dirs);
+
+// filesystem mount helpers
+void make_target_dir(SSHSession& session, const std::string& root, const std::string& relative_target);
+void set_owner_for(SSHSession& session, const std::string& root, const std::string& relative_target, int vm_user,
+                   int vm_group);
+std::pair<std::string, std::string> get_path_split(SSHSession& session, const std::string& target);
 
 // special-file helpers
 void link_autostart_file(const QDir& link_dir, const QString& autostart_subdir, const QString& autostart_filename);
@@ -96,7 +100,8 @@ bool valid_mac_address(const std::string& mac);
 
 // string helpers
 bool has_only_digits(const std::string& value);
-std::string& trim_end(std::string& s);
+std::string& trim_end(
+    std::string& s, std::function<bool(char)> filter = [](char ch) { return std::isspace(ch); });
 std::string& trim_newline(std::string& s);
 std::string escape_char(const std::string& s, char c);
 std::string escape_for_shell(const std::string& s);
@@ -107,8 +112,6 @@ std::string match_line_for(const std::string& output, const std::string& matcher
 bool is_running(const VirtualMachine::State& state);
 void wait_until_ssh_up(VirtualMachine* virtual_machine, std::chrono::milliseconds timeout,
                        std::function<void()> const& ensure_vm_is_running = []() {});
-void install_sshfs_for(const std::string& name, SSHSession& session,
-                       const std::chrono::milliseconds timeout = std::chrono::minutes(5));
 std::string run_in_ssh_session(SSHSession& session, const std::string& cmd);
 
 // yaml helpers
@@ -123,7 +126,7 @@ std::string qenum_to_string(RegisteredQtEnum val);
 
 // other helpers
 QString get_multipass_storage();
-QString make_uuid();
+QString make_uuid(const std::optional<std::string>& seed = std::nullopt);
 template <typename OnTimeoutCallable, typename TryAction, typename... Args>
 void try_action_for(OnTimeoutCallable&& on_timeout, std::chrono::milliseconds timeout, TryAction&& try_action,
                     Args&&... args);
@@ -139,6 +142,9 @@ public:
     virtual void exit(int code);
     virtual void make_file_with_content(const std::string& file_name, const std::string& content,
                                         const bool& overwrite = false);
+    virtual Path make_dir(const QDir& a_dir, const QString& name,
+                          QFileDevice::Permissions permissions = QFileDevice::Permissions());
+    virtual Path make_dir(const QDir& dir, QFileDevice::Permissions permissions = QFileDevice::Permissions());
 
     // command and process helpers
     virtual std::string run_cmd_for_output(const QString& cmd, const QStringList& args,

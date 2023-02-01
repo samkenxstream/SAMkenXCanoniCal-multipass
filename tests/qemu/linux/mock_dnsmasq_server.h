@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@ struct MockDNSMasqServer : public DNSMasqServer
 {
     using DNSMasqServer::DNSMasqServer; // ctor
 
-    MOCK_METHOD1(get_ip_for, optional<IPAddress>(const std::string&));
+    MOCK_METHOD1(get_ip_for, std::optional<IPAddress>(const std::string&));
     MOCK_METHOD1(release_mac, void(const std::string&));
     MOCK_METHOD0(check_dnsmasq_running, void());
 };

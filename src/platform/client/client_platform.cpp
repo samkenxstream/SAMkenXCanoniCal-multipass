@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 
 #include <unistd.h>
 
+namespace mp = multipass;
 namespace mcp = multipass::cli::platform;
 
 void mcp::parse_transfer_entry(const QString& entry, QString& path, QString& instance_name)
@@ -54,4 +55,9 @@ int mcp::getuid()
 int mcp::getgid()
 {
     return ::getgid();
+}
+
+std::pair<std::string, std::string> mcp::Platform::get_user_password(mp::Terminal*) const
+{
+    return {};
 }

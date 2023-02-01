@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include <multipass/file_ops.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
+#include <multipass/platform.h>
 #include <multipass/ssh/ssh_session.h>
 #include <multipass/standard_paths.h>
 #include <multipass/utils.h>
@@ -215,10 +216,13 @@ QTemporaryFile mp::utils::create_temp_file_with_path(const QString& filename_tem
 
 std::string mp::utils::to_cmd(const std::vector<std::string>& args, QuoteType quote_type)
 {
+    if (args.empty())
+        return "";
+
     fmt::memory_buffer buf;
     for (auto const& arg : args)
     {
-        fmt::format_to(buf, "{0}{1}{0} ", quote_for(arg, quote_type), arg);
+        fmt::format_to(std::back_inserter(buf), "{0}{1}{0} ", quote_for(arg, quote_type), arg);
     }
 
     // Remove the last space inserted
@@ -227,9 +231,9 @@ std::string mp::utils::to_cmd(const std::vector<std::string>& args, QuoteType qu
     return cmd;
 }
 
-std::string& mp::utils::trim_end(std::string& s)
+std::string& mp::utils::trim_end(std::string& s, std::function<bool(char)> filter)
 {
-    auto rev_it = std::find_if(s.rbegin(), s.rend(), [](char ch) { return !std::isspace(ch); });
+    auto rev_it = std::find_if_not(s.rbegin(), s.rend(), filter);
     s.erase(rev_it.base(), s.end());
     return s;
 }
@@ -322,61 +326,9 @@ void mp::utils::wait_until_ssh_up(VirtualMachine* virtual_machine, std::chrono::
     mp::utils::try_action_for(on_timeout, timeout, action);
 }
 
-void mp::utils::install_sshfs_for(const std::string& name, mp::SSHSession& session,
-                                  const std::chrono::milliseconds timeout)
-{
-    mpl::log(mpl::Level::info, category, fmt::format("Installing the multipass-sshfs snap in \'{}\'", name));
-
-    // Check if snap support is installed in the instance
-    auto which_proc = session.exec("which snap");
-    if (which_proc.exit_code() != 0)
-    {
-        mpl::log(mpl::Level::warning, category, fmt::format("Snap support is not installed in \'{}\'", name));
-        throw std::runtime_error(
-            fmt::format("Snap support needs to be installed in \'{}\' in order to support mounts.\n"
-                        "Please see https://docs.snapcraft.io/installing-snapd for information on\n"
-                        "how to install snap support for your instance's distribution.\n\n"
-                        "If your distribution's instructions specify enabling classic snap support,\n"
-                        "please do that as well.\n\n"
-                        "Alternatively, install `sshfs` manually inside the instance.",
-                        name));
-    }
-
-    // Check if /snap exists for "classic" snap support
-    auto test_file_proc = session.exec("[ -e /snap ]");
-    if (test_file_proc.exit_code() != 0)
-    {
-        mpl::log(mpl::Level::warning, category, fmt::format("Classic snap support symlink is needed in \'{}\'", name));
-        throw std::runtime_error(
-            fmt::format("Classic snap support is not enabled for \'{}\'!\n\n"
-                        "Please see https://docs.snapcraft.io/installing-snapd for information on\n"
-                        "how to enable classic snap support for your instance's distribution.",
-                        name));
-    }
-
-    try
-    {
-        auto proc = session.exec("sudo snap install multipass-sshfs");
-        if (proc.exit_code(timeout) != 0)
-        {
-            auto error_msg = proc.read_std_error();
-            mpl::log(mpl::Level::warning, category,
-                     fmt::format("Failed to install \'multipass-sshfs\', error message: \'{}\'",
-                                 mp::utils::trim_end(error_msg)));
-            throw mp::SSHFSMissingError();
-        }
-    }
-    catch (const mp::ExitlessSSHProcessException&)
-    {
-        mpl::log(mpl::Level::info, category, fmt::format("Timeout while installing 'sshfs' in '{}'", name));
-    }
-}
-
 // Executes a given command on the given session. Returns the output of the command, with spaces and feeds trimmed.
-// Caveat emptor: if the command fails, an empty string is returned.
 std::string mp::utils::run_in_ssh_session(mp::SSHSession& session, const std::string& cmd)
 {
-    mpl::log(mpl::Level::debug, category, fmt::format("executing '{}'", cmd));
     auto proc = session.exec(cmd);
 
     if (proc.exit_code() != 0)
@@ -384,16 +336,10 @@ std::string mp::utils::run_in_ssh_session(mp::SSHSession& session, const std::st
         auto error_msg = proc.read_std_error();
         mpl::log(mpl::Level::warning, category,
                  fmt::format("failed to run '{}', error message: '{}'", cmd, mp::utils::trim_end(error_msg)));
-        return std::string{};
+        throw std::runtime_error(mp::utils::trim_end(error_msg));
     }
 
     auto output = proc.read_std_output();
-    if (output.empty())
-    {
-        mpl::log(mpl::Level::warning, category, fmt::format("no output after running '{}'", cmd));
-        return std::string{};
-    }
-
     return mp::utils::trim_end(output);
 }
 
@@ -421,7 +367,7 @@ void mp::utils::link_autostart_file(const QDir& link_dir, const QString& autosta
     }
 }
 
-mp::Path mp::utils::make_dir(const QDir& a_dir, const QString& name, const QFileDevice::Permissions permissions)
+mp::Path mp::Utils::make_dir(const QDir& a_dir, const QString& name, QFileDevice::Permissions permissions)
 {
     mp::Path dir_path;
     bool success{false};
@@ -444,13 +390,13 @@ mp::Path mp::utils::make_dir(const QDir& a_dir, const QString& name, const QFile
 
     if (permissions)
     {
-        QFile::setPermissions(dir_path, permissions);
+        MP_PLATFORM.set_permissions(dir_path, permissions);
     }
 
     return dir_path;
 }
 
-mp::Path mp::utils::make_dir(const QDir& dir, const QFileDevice::Permissions permissions)
+mp::Path mp::Utils::make_dir(const QDir& dir, QFileDevice::Permissions permissions)
 {
     return make_dir(dir, QString(), permissions);
 }
@@ -476,12 +422,10 @@ QString mp::utils::get_multipass_storage()
     return QString::fromUtf8(qgetenv(mp::multipass_storage_env_var));
 }
 
-QString mp::utils::make_uuid()
+QString mp::utils::make_uuid(const std::optional<std::string>& seed)
 {
-    auto uuid = QUuid::createUuid().toString();
-
-    // Remove curly brackets enclosing uuid
-    return uuid.mid(1, uuid.size() - 2);
+    auto uuid = seed ? QUuid::createUuidV3(QUuid{}, QString::fromStdString(*seed)) : QUuid::createUuid();
+    return uuid.toString(QUuid::WithoutBraces);
 }
 
 std::string mp::utils::contents_of(const multipass::Path& file_path)
@@ -558,7 +502,7 @@ void mp::utils::check_and_create_config_file(const QString& config_file_path)
 
     if (!config_file.exists())
     {
-        make_dir({}, QFileInfo{config_file_path}.dir().path()); // make sure parent dir is there
+        MP_UTILS.make_dir({}, QFileInfo{config_file_path}.dir().path()); // make sure parent dir is there
         config_file.open(QIODevice::WriteOnly);
     }
 }
@@ -626,4 +570,49 @@ std::string mp::utils::emit_yaml(const YAML::Node& node)
 std::string mp::utils::emit_cloud_config(const YAML::Node& node)
 {
     return fmt::format("#cloud-config\n{}\n", emit_yaml(node));
+}
+
+// Split a path into existing and to-be-created parts.
+std::pair<std::string, std::string> mp::utils::get_path_split(mp::SSHSession& session, const std::string& target)
+{
+    std::string absolute;
+
+    switch (target[0])
+    {
+    case '~':
+        absolute = mp::utils::run_in_ssh_session(
+            session, fmt::format("echo ~{}", mp::utils::escape_for_shell(target.substr(1, target.size() - 1))));
+        break;
+    case '/':
+        absolute = target;
+        break;
+    default:
+        absolute =
+            mp::utils::run_in_ssh_session(session, fmt::format("echo $PWD/{}", mp::utils::escape_for_shell(target)));
+        break;
+    }
+
+    std::string existing = mp::utils::run_in_ssh_session(
+        session, fmt::format("sudo /bin/bash -c 'P=\"{}\"; while [ ! -d \"$P/\" ]; do P=\"${{P%/*}}\"; done; echo $P/'",
+                             absolute));
+
+    return {existing,
+            QDir(QString::fromStdString(existing)).relativeFilePath(QString::fromStdString(absolute)).toStdString()};
+}
+
+// Create a directory on a given root folder.
+void mp::utils::make_target_dir(mp::SSHSession& session, const std::string& root, const std::string& relative_target)
+{
+    mp::utils::run_in_ssh_session(
+        session, fmt::format("sudo /bin/bash -c 'cd \"{}\" && mkdir -p \"{}\"'", root, relative_target));
+}
+
+// Set ownership of all directories on a path starting on a given root.
+// Assume it is already created.
+void mp::utils::set_owner_for(mp::SSHSession& session, const std::string& root, const std::string& relative_target,
+                              int vm_user, int vm_group)
+{
+    mp::utils::run_in_ssh_session(session,
+                                  fmt::format("sudo /bin/bash -c 'cd \"{}\" && chown -R {}:{} \"{}\"'", root, vm_user,
+                                              vm_group, relative_target.substr(0, relative_target.find_first_of('/'))));
 }

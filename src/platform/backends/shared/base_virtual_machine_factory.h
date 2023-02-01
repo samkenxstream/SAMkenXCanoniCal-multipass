@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 #include <multipass/exceptions/not_implemented_on_this_backend_exception.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
+#include <multipass/mount_handler.h>
 #include <multipass/virtual_machine_factory.h>
 
 #include <daemon/default_vm_image_vault.h>

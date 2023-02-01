@@ -71,4 +71,16 @@ add_c_mocks(
   sftp_free
   sftp_get_error
   sftp_close
+  sftp_stat
+  sftp_lstat
+  sftp_opendir
+  sftp_readdir
+  sftp_readlink
+  sftp_mkdir
+  sftp_symlink
+  sftp_unlink
+  sftp_setstat
+  sftp_dir_eof
+  sftp_chmod
+  ssh_get_error
 )

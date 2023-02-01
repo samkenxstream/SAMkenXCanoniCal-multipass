@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,6 @@
 
 #include <multipass/constants.h>
 #include <multipass/exceptions/settings_exceptions.h>
-#include <multipass/optional.h>
 #include <multipass/settings/basic_setting_spec.h>
 #include <multipass/settings/custom_setting_spec.h>
 #include <multipass/settings/persistent_settings_handler.h>
@@ -41,9 +40,9 @@ class TestPersistentSettingsHandler : public Test
 {
 public:
     mp::PersistentSettingsHandler
-    make_handler(const mp::optional<QString>& specific_key = mp::nullopt,
-                 const mp::optional<QString>& specific_val = mp::nullopt,
-                 const mp::optional<std::function<QString(QString)>>& specific_interpreter = mp::nullopt)
+    make_handler(const std::optional<QString>& specific_key = std::nullopt,
+                 const std::optional<QString>& specific_val = std::nullopt,
+                 const std::optional<std::function<QString(QString)>>& specific_interpreter = std::nullopt)
     {
         auto setting_set = make_basic_persistent_settings();
 
@@ -220,6 +219,28 @@ TEST_F(TestPersistentSettingsHandler, getReturnsRecordedSetting)
 
     ASSERT_NE(val, default_);
     EXPECT_EQ(handler.get(key), QString{val});
+}
+
+TEST_F(TestPersistentSettingsHandler, getResetsInvalidValueAndReturnsDefault)
+{
+    const auto key = "tampered.setting", val = "xyz", default_ = "abc", error = "nonsense";
+    const auto handler = make_handler(key, default_, [&key, &val, &error](QString v) -> QString {
+        if (v == val)
+            throw mp::InvalidSettingException{key, val, error};
+
+        return v;
+    });
+
+    {
+        InSequence seq;
+        EXPECT_CALL(*mock_qsettings, value_impl(Eq(key), _)).WillOnce(Return(val));
+        EXPECT_CALL(*mock_qsettings, remove(Eq(key)));
+    }
+
+    inject_mock_qsettings();
+
+    ASSERT_NE(val, default_);
+    EXPECT_EQ(handler.get(key), QString{default_});
 }
 
 TEST_F(TestPersistentSettingsHandler, getReturnsDefaultByDefault)

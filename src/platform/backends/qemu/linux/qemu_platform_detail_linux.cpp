@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -116,7 +116,7 @@ void delete_virtual_switch(const QString& bridge_name)
 
 mp::QemuPlatformDetail::QemuPlatformDetail(const mp::Path& data_dir)
     : bridge_name{multipass_bridge_name},
-      network_dir{mp::utils::make_dir(QDir(data_dir), "network")},
+      network_dir{MP_UTILS.make_dir(QDir(data_dir), "network")},
       subnet{MP_BACKEND.get_subnet(network_dir, bridge_name)},
       dnsmasq_server{init_nat_network(network_dir, bridge_name, subnet)},
       firewall_config{MP_FIREWALL_CONFIG_FACTORY.make_firewall_config(bridge_name, subnet)}
@@ -134,7 +134,7 @@ mp::QemuPlatformDetail::~QemuPlatformDetail()
     delete_virtual_switch(bridge_name);
 }
 
-mp::optional<mp::IPAddress> mp::QemuPlatformDetail::get_ip_for(const std::string& hw_addr)
+std::optional<mp::IPAddress> mp::QemuPlatformDetail::get_ip_for(const std::string& hw_addr)
 {
     return dnsmasq_server->get_ip_for(hw_addr);
 }
@@ -169,15 +169,30 @@ QStringList mp::QemuPlatformDetail::vm_platform_args(const VirtualMachineDescrip
 
     name_to_net_device_map.emplace(vm_desc.vm_name, std::make_pair(tap_device_name, vm_desc.default_mac_address));
 
-    return QStringList() << "--enable-kvm"
-                         // Pass host CPU flags to VM
-                         << "-cpu"
-                         << "host"
-                         // Set up the network related args
-                         << "-nic"
-                         << QString::fromStdString(
-                                fmt::format("tap,ifname={},script=no,downscript=no,model=virtio-net-pci,mac={}",
-                                            tap_device_name, vm_desc.default_mac_address));
+    QStringList opts;
+
+    // Work around for Xenial where UEFI images are not one and the same
+    if (!(vm_desc.image.original_release == "16.04 LTS" && vm_desc.image.image_path.contains("disk1.img")))
+    {
+#if defined Q_PROCESSOR_X86
+        opts << "-bios"
+             << "OVMF.fd";
+#elif defined Q_PROCESSOR_ARM
+        opts << "-bios"
+             << "QEMU_EFI.fd";
+#endif
+    }
+
+    opts << "--enable-kvm"
+         // Pass host CPU flags to VM
+         << "-cpu"
+         << "host"
+         // Set up the network related args
+         << "-nic"
+         << QString::fromStdString(fmt::format("tap,ifname={},script=no,downscript=no,model=virtio-net-pci,mac={}",
+                                               tap_device_name, vm_desc.default_mac_address));
+
+    return opts;
 }
 
 mp::QemuPlatform::UPtr mp::QemuPlatformFactory::make_qemu_platform(const Path& data_dir) const

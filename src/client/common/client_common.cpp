@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -133,7 +133,7 @@ bool client_certs_exist(const QString& cert_dir_path)
 
 void copy_client_certs_to_common_dir(const QString& cert_dir_path, const QString& common_cert_dir_path)
 {
-    mp::utils::make_dir(common_cert_dir_path);
+    MP_UTILS.make_dir(common_cert_dir_path);
     QDir common_dir{common_cert_dir_path}, cert_dir{cert_dir_path};
 
     QFile::copy(cert_dir.filePath(mp::client_cert_file), common_dir.filePath(mp::client_cert_file));
@@ -145,9 +145,7 @@ mp::ReturnCode mp::cmd::standard_failure_handler_for(const std::string& command,
                                                      const grpc::Status& status, const std::string& error_details)
 {
     fmt::print(cerr, "{} failed: {}\n{}", command, status.error_message(),
-               !error_details.empty()
-                   ? fmt::format("{}\n", error_details)
-                   : !status.error_details().empty() ? fmt::format("{}\n", status.error_details()) : "");
+               !error_details.empty() ? fmt::format("{}\n", error_details) : "");
 
     return return_code_for(status.error_code());
 }
@@ -226,7 +224,7 @@ std::shared_ptr<grpc::Channel> mp::client::make_channel(const std::string& serve
         }
 
         mp::utils::remove_directories(cert_dirs);
-        mp::utils::make_dir(common_client_cert_dir_path);
+        MP_UTILS.make_dir(common_client_cert_dir_path);
 
         return grpc::CreateChannel(server_address,
                                    grpc::SslCredentials(get_ssl_credentials_opts_from(common_client_cert_dir_path)));

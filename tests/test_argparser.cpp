@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 #include "tests/fake_alias_config.h"
 #include "tests/stub_terminal.h"
 
-#include <multipass/cli/alias_definition.h>
+#include <multipass/alias_definition.h>
 #include <multipass/cli/argparser.h>
 #include <multipass/cli/command.h>
 
@@ -77,7 +77,7 @@ TEST_P(TestAliasArguments, test_alias_arguments)
 
     const auto& [pre, post] = GetParam();
 
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}}});
 
     mp::AliasDict alias_dict(&term);
     auto parser = mp::ArgParser{pre, cmds, oss, oss};

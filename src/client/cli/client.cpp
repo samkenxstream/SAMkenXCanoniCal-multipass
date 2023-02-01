@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -79,7 +79,7 @@ mp::Client::Client(ClientConfig& config)
     add_command<cmd::Alias>(aliases);
     add_command<cmd::Aliases>(aliases);
     add_command<cmd::Authenticate>();
-    add_command<cmd::Launch>();
+    add_command<cmd::Launch>(aliases);
     add_command<cmd::Purge>(aliases);
     add_command<cmd::Exec>(aliases);
     add_command<cmd::Find>();

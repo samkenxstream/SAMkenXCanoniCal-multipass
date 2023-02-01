@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -59,7 +59,7 @@ auto instance_mac_addr_for(virDomainPtr domain, const mp::LibvirtWrapper::UPtr& 
 
 auto instance_ip_for(const std::string& mac_addr, const mp::LibvirtWrapper::UPtr& libvirt_wrapper)
 {
-    mp::optional<mp::IPAddress> ip_address;
+    std::optional<mp::IPAddress> ip_address;
 
     mp::LibVirtVirtualMachine::ConnectionUPtr connection{nullptr, nullptr};
     try
@@ -296,8 +296,6 @@ void mp::LibVirtVirtualMachine::start()
         domain = domain_by_name_for(vm_name, connection.get(), libvirt_wrapper);
 
     state = refresh_instance_state_for_domain(domain.get(), state, libvirt_wrapper);
-    if (state == State::running)
-        return;
 
     if (state == State::suspended)
         mpl::log(mpl::Level::info, vm_name, fmt::format("Resuming from a suspended state"));
@@ -432,7 +430,7 @@ void mp::LibVirtVirtualMachine::ensure_vm_is_running()
 
 std::string mp::LibVirtVirtualMachine::ssh_hostname(std::chrono::milliseconds timeout)
 {
-    auto get_ip = [this]() -> optional<IPAddress> { return instance_ip_for(mac_addr, libvirt_wrapper); };
+    auto get_ip = [this]() -> std::optional<IPAddress> { return instance_ip_for(mac_addr, libvirt_wrapper); };
 
     return mp::backend::ip_address_for(this, get_ip, timeout);
 }

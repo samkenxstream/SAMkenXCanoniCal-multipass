@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,8 +20,9 @@
 
 #include <QProcessEnvironment>
 #include <QStringList>
+
 #include <memory>
-#include <multipass/optional.h>
+#include <optional>
 
 namespace multipass
 {
@@ -60,7 +61,7 @@ struct ProcessState
         return QString();
     }
 
-    multipass::optional<int> exit_code; // only set if process stops successfully. Can be set even if success() is false
+    std::optional<int> exit_code; // only set if process stops successfully. Can be set even if success() is false
 
     struct Error
     {
@@ -68,7 +69,7 @@ struct ProcessState
         QString message;              // human-readable error message
     };
 
-    multipass::optional<Error> error;
+    std::optional<Error> error;
 };
 
 class Process : public QObject

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,6 +34,15 @@
 namespace mp = multipass;
 namespace mpu = multipass::utils;
 
+namespace
+{
+void check_working_directory_string(const std::string& dir)
+{
+    if (dir != "map" && dir != "default")
+        throw std::runtime_error(fmt::format("invalid working_directory string \"{}\"", dir));
+}
+} // namespace
+
 mp::AliasDict::AliasDict(mp::Terminal* term) : cout(term->cout()), cerr(term->cerr())
 {
     const auto file_name = QStringLiteral("%1_aliases.json").arg(mp::client_name);
@@ -60,12 +69,21 @@ mp::AliasDict::~AliasDict()
     }
 }
 
-void mp::AliasDict::add_alias(const std::string& alias, const mp::AliasDefinition& command)
+bool mp::AliasDict::add_alias(const std::string& alias, const mp::AliasDefinition& command)
 {
     if (aliases.try_emplace(alias, command).second)
     {
         modified = true;
+
+        return true;
     }
+
+    return false;
+}
+
+bool mp::AliasDict::exists_alias(const std::string& alias)
+{
+    return aliases.count(alias);
 }
 
 bool mp::AliasDict::remove_alias(const std::string& alias)
@@ -98,7 +116,7 @@ std::vector<std::string> mp::AliasDict::remove_aliases_for_instance(const std::s
     return removed_aliases;
 }
 
-mp::optional<mp::AliasDefinition> mp::AliasDict::get_alias(const std::string& alias) const
+std::optional<mp::AliasDefinition> mp::AliasDict::get_alias(const std::string& alias) const
 {
     try
     {
@@ -106,7 +124,7 @@ mp::optional<mp::AliasDefinition> mp::AliasDict::get_alias(const std::string& al
     }
     catch (const std::out_of_range&)
     {
-        return mp::nullopt;
+        return std::nullopt;
     }
 }
 
@@ -143,7 +161,17 @@ void mp::AliasDict::load_dict()
         auto instance = record["instance"].toString().toStdString();
         auto command = record["command"].toString().toStdString();
 
-        aliases.emplace(alias, mp::AliasDefinition{instance, command});
+        auto read_working_directory = record["working-directory"];
+        std::string working_directory;
+
+        if (read_working_directory.isString() && !read_working_directory.toString().isEmpty())
+            working_directory = read_working_directory.toString().toStdString();
+        else
+            working_directory = "default";
+
+        check_working_directory_string(working_directory);
+
+        aliases.emplace(alias, mp::AliasDefinition{instance, command, working_directory});
     }
 
     db_file.close();
@@ -153,8 +181,12 @@ void mp::AliasDict::save_dict()
 {
     auto alias_to_json = [](const mp::AliasDefinition& alias) -> QJsonObject {
         QJsonObject json;
+
+        check_working_directory_string(alias.working_directory);
+
         json.insert("instance", QString::fromStdString(alias.instance));
         json.insert("command", QString::fromStdString(alias.command));
+        json.insert("working-directory", QString::fromStdString(alias.working_directory));
 
         return json;
     };

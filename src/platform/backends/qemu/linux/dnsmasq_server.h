@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,13 +20,13 @@
 
 #include <multipass/disabled_copy_move.h>
 #include <multipass/ip_address.h>
-#include <multipass/optional.h>
 #include <multipass/path.h>
 #include <multipass/singleton.h>
 
 #include <QTemporaryFile>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace multipass
@@ -41,7 +41,7 @@ public:
     DNSMasqServer(const Path& data_dir, const QString& bridge_name, const std::string& subnet);
     virtual ~DNSMasqServer(); // inherited by mock for testing
 
-    virtual optional<IPAddress> get_ip_for(const std::string& hw_addr);
+    virtual std::optional<IPAddress> get_ip_for(const std::string& hw_addr);
     virtual void release_mac(const std::string& hw_addr);
     virtual void check_dnsmasq_running();
 

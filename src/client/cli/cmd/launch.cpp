@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,25 +18,30 @@
 #include "launch.h"
 #include "animated_spinner.h"
 #include "common_cli.h"
+#include "create_alias.h"
 
 #include <multipass/cli/argparser.h>
 #include <multipass/cli/client_platform.h>
 #include <multipass/constants.h>
 #include <multipass/exceptions/cmd_exceptions.h>
 #include <multipass/exceptions/snap_environment_exception.h>
+#include <multipass/file_ops.h>
 #include <multipass/format.h>
 #include <multipass/memory_size.h>
 #include <multipass/settings/settings.h>
 #include <multipass/snap_utils.h>
+#include <multipass/standard_paths.h>
+#include <multipass/url_downloader.h>
 #include <multipass/utils.h>
 
 #include <yaml-cpp/yaml.h>
 
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QTimeZone>
-
-#include <cstdlib>
+#include <QUrl>
+#include <filesystem>
 #include <regex>
 #include <unordered_map>
 
@@ -44,6 +49,7 @@ namespace mp = multipass;
 namespace mpu = multipass::utils;
 namespace cmd = multipass::cmd;
 namespace mcp = multipass::cli::platform;
+namespace fs = std::filesystem;
 
 namespace
 {
@@ -126,12 +132,39 @@ mp::ReturnCode cmd::Launch::run(mp::ArgParser* parser)
     }
 
     auto ret = request_launch(parser);
-    if (ret == ReturnCode::Ok && !petenv_name.isEmpty() && request.instance_name() == petenv_name.toStdString())
+
+    if (ret != ReturnCode::Ok)
+        return ret;
+
+    if (MP_SETTINGS.get_as<bool>(mounts_key))
     {
-        if (MP_SETTINGS.get_as<bool>(mounts_key))
-            ret = mount_home(parser);
-        else
-            cout << fmt::format("Skipping '{}' mount due to disabled mounts feature\n", mp::home_automount_dir);
+        auto has_home_mount = std::count_if(mount_routes.begin(), mount_routes.end(),
+                                            [](const auto& route) { return route.second == home_automount_dir; });
+
+        if (request.instance_name() == petenv_name.toStdString() && !has_home_mount)
+        {
+            try
+            {
+                mount_routes.emplace_back(QString::fromLocal8Bit(mpu::snap_real_home_dir()), home_automount_dir);
+            }
+            catch (const SnapEnvironmentException&)
+            {
+                mount_routes.emplace_back(QDir::toNativeSeparators(QDir::homePath()), home_automount_dir);
+            }
+        }
+
+        for (const auto& [source, target] : mount_routes)
+        {
+            auto mount_ret = mount(parser, source, target);
+            if (ret == ReturnCode::Ok)
+            {
+                ret = mount_ret;
+            }
+        }
+    }
+    else
+    {
+        cout << "Skipping mount due to disabled mounts feature\n";
     }
 
     return ret;
@@ -172,15 +205,20 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
     QCommandLineOption diskOption(
         {"d", "disk"},
         QString::fromStdString(fmt::format("Disk space to allocate. Positive integers, in "
-                                           "bytes, or with K, M, G suffix.\nMinimum: {}, default: {}.",
+                                           "bytes, or decimals, with K, M, G suffix.\nMinimum: {}, default: {}.",
                                            min_disk_size, default_disk_size)),
         "disk", QString::fromUtf8(default_disk_size));
+
     QCommandLineOption memOption(
-        {"m", "mem"},
+        {"m", "memory"},
         QString::fromStdString(fmt::format("Amount of memory to allocate. Positive integers, "
-                                           "in bytes, or with K, M, G suffix.\nMinimum: {}, default: {}.",
+                                           "in bytes, or decimals, with K, M, G suffix.\nMinimum: {}, default: {}.",
                                            min_memory_size, default_memory_size)),
-        "mem", QString::fromUtf8(default_memory_size)); // In MB's
+        "memory", QString::fromUtf8(default_memory_size)); // In MB's
+    QCommandLineOption memOptionDeprecated(
+        "mem", QString::fromStdString("Deprecated memory allocation long option. See \"--memory\"."), "memory",
+        QString::fromUtf8(default_memory_size));
+    memOptionDeprecated.setFlags(QCommandLineOption::HiddenFromHelp);
 
     const auto name_option_desc =
         petenv_name.isEmpty()
@@ -190,8 +228,8 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
                   .arg(petenv_name, mp::home_automount_dir);
 
     QCommandLineOption nameOption({"n", "name"}, name_option_desc, "name");
-    QCommandLineOption cloudInitOption("cloud-init", "Path to a user-data cloud-init configuration, or '-' for stdin",
-                                       "file");
+    QCommandLineOption cloudInitOption(
+        "cloud-init", "Path or URL to a user-data cloud-init configuration, or '-' for stdin", "file> | <url");
     QCommandLineOption networkOption("network",
                                      "Add a network interface to the instance, where <spec> is in the "
                                      "\"key=value,key=value\" format, with the following keys available:\n"
@@ -203,8 +241,13 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
                                      "You can also use a shortcut of \"<name>\" to mean \"name=<name>\".",
                                      "spec");
     QCommandLineOption bridgedOption("bridged", "Adds one `--network bridged` network.");
+    QCommandLineOption mountOption("mount",
+                                   "Mount a local directory inside the instance. If <instance-path> is omitted, the "
+                                   "mount point will be the same as the absolute path of <local-path>",
+                                   "local-path>:<instance-path");
 
-    parser->addOptions({cpusOption, diskOption, memOption, nameOption, cloudInitOption, networkOption, bridgedOption});
+    parser->addOptions({cpusOption, diskOption, memOption, memOptionDeprecated, nameOption, cloudInitOption,
+                        networkOption, bridgedOption, mountOption});
 
     mp::cmd::add_timeout(parser);
 
@@ -271,9 +314,21 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
         request.set_num_cores(cpu_count);
     }
 
-    if (parser->isSet(memOption))
+    if (parser->isSet(memOption) || parser->isSet(memOptionDeprecated))
     {
-        auto arg_mem_size = parser->value(memOption).toStdString();
+        if (parser->isSet(memOption) && parser->isSet(memOptionDeprecated))
+        {
+            cerr << "error: Invalid option(s) used for memory allocation. Please use \"--memory\" to specify "
+                    "amount of memory to allocate.\n";
+            return ParseCode::CommandLineError;
+        }
+
+        if (parser->isSet(memOptionDeprecated))
+            cout << "warning: \"--mem\" long option will be deprecated in favour of \"--memory\" in a future release."
+                    "Please update any scripts, etc.\n";
+
+        auto arg_mem_size = parser->isSet(memOption) ? parser->value(memOption).toStdString()
+                                                     : parser->value(memOptionDeprecated).toStdString();
 
         mp::MemorySize{arg_mem_size}; // throw if bad
 
@@ -289,6 +344,40 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
         request.set_disk_space(arg_disk_size);
     }
 
+    if (parser->isSet(mountOption))
+    {
+        for (const auto& value : parser->values(mountOption))
+        {
+            // this is needed so that Windows absolute paths are not split at the colon following the drive letter
+            auto colon_split = QRegularExpression{R"(^[A-Za-z]:[\\/].*)"}.match(value).hasMatch();
+            auto mount_source = value.section(':', 0, colon_split);
+            auto mount_target = value.section(':', colon_split + 1);
+            mount_target = mount_target.isEmpty() ? mount_source : mount_target;
+
+            // Validate source directory of client side mounts
+            QFileInfo source_dir(mount_source);
+            if (!MP_FILEOPS.exists(source_dir))
+            {
+                cerr << "Mount source path \"" << mount_source.toStdString() << "\" does not exist\n";
+                return ParseCode::CommandLineError;
+            }
+
+            if (!MP_FILEOPS.isDir(source_dir))
+            {
+                cerr << "Mount source path \"" << mount_source.toStdString() << "\" is not a directory\n";
+                return ParseCode::CommandLineError;
+            }
+
+            if (!MP_FILEOPS.isReadable(source_dir))
+            {
+                cerr << "Mount source path \"" << mount_source.toStdString() << "\" is not readable\n";
+                return ParseCode::CommandLineError;
+            }
+
+            mount_routes.emplace_back(mount_source, mount_target);
+        }
+    }
+
     if (parser->isSet(cloudInitOption))
     {
         try
@@ -299,11 +388,16 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
             {
                 node = YAML::Load(term->read_all_cin());
             }
+            else if (cloudInitFile.startsWith("http://") || cloudInitFile.startsWith("https://"))
+            {
+                URLDownloader downloader{std::chrono::minutes{1}};
+                auto downloaded_yaml = downloader.download(QUrl(cloudInitFile));
+                node = YAML::Load(downloaded_yaml.toStdString());
+            }
             else
             {
-                QFileInfo check_file(cloudInitFile);
-
-                if (!check_file.exists() || !check_file.isFile())
+                auto file_type = fs::status(cloudInitFile.toStdString()).type();
+                if (file_type != fs::file_type::regular && file_type != fs::file_type::fifo)
                 {
                     cerr << "error: No such file: " << cloudInitFile.toStdString() << "\n";
                     return ParseCode::CommandLineError;
@@ -360,10 +454,52 @@ mp::ReturnCode cmd::Launch::request_launch(const ArgParser* parser)
         timer->start();
     }
 
-    auto on_success = [this](mp::LaunchReply& reply) {
+    auto on_success = [this, &parser](mp::LaunchReply& reply) {
         spinner->stop();
         if (timer)
             timer->pause();
+
+        std::vector<std::string> warning_aliases;
+        for (const auto& alias_to_be_created : reply.aliases_to_be_created())
+        {
+            AliasDefinition alias_definition{alias_to_be_created.instance(), alias_to_be_created.command(),
+                                             alias_to_be_created.working_directory()};
+            if (create_alias(aliases, alias_to_be_created.name(), alias_definition, cout, cerr) != ReturnCode::Ok)
+                warning_aliases.push_back(alias_to_be_created.name());
+        }
+
+        if (warning_aliases.size())
+            cout << fmt::format("Warning: unable to create {} {}.\n", warning_aliases.size() == 1 ? "alias" : "aliases",
+                                fmt::join(warning_aliases, ", "));
+
+        instance_name = QString::fromStdString(request.instance_name().empty() ? reply.vm_instance_name()
+                                                                               : request.instance_name());
+
+        for (const auto& workspace_to_be_created : reply.workspaces_to_be_created())
+        {
+            auto home_dir = mpu::in_multipass_snap() ? QString::fromLocal8Bit(mpu::snap_real_home_dir())
+                                                     : MP_STDPATHS.writableLocation(StandardPaths::HomeLocation);
+            auto full_path_str = home_dir + "/multipass/" + QString::fromStdString(workspace_to_be_created);
+
+            QDir full_path(full_path_str);
+            if (full_path.exists())
+            {
+                cerr << fmt::format("Folder \"{}\" already exists.\n", full_path_str);
+            }
+            else
+            {
+                if (!MP_FILEOPS.mkpath(full_path, full_path_str))
+                {
+                    cerr << fmt::format("Error creating folder {}. Not mounting.\n", full_path_str);
+                    continue;
+                }
+            }
+
+            if (mount(parser, full_path_str, QString::fromStdString(workspace_to_be_created)) != ReturnCode::Ok)
+            {
+                cerr << fmt::format("Error mounting folder {}.\n", full_path_str);
+            }
+        }
 
         cout << "Launched: " << reply.vm_instance_name() << "\n";
 
@@ -417,7 +553,8 @@ mp::ReturnCode cmd::Launch::request_launch(const ArgParser* parser)
         return standard_failure_handler_for(name(), cerr, status, error_details);
     };
 
-    auto streaming_callback = [this](mp::LaunchReply& reply) {
+    auto streaming_callback = [this](mp::LaunchReply& reply,
+                                     grpc::ClientReaderWriterInterface<LaunchRequest, LaunchReply>* client) {
         std::unordered_map<int, std::string> progress_messages{
             {LaunchProgress_ProgressTypes_IMAGE, "Retrieving image: "},
             {LaunchProgress_ProgressTypes_KERNEL, "Retrieving kernel image: "},
@@ -461,23 +598,13 @@ mp::ReturnCode cmd::Launch::request_launch(const ArgParser* parser)
     return dispatch(&RpcMethod::launch, request, on_success, on_failure, streaming_callback);
 }
 
-auto cmd::Launch::mount_home(const mp::ArgParser* parser) -> ReturnCode
+auto cmd::Launch::mount(const mp::ArgParser* parser, const QString& mount_source, const QString& mount_target)
+    -> ReturnCode
 {
-    QString mount_source{};
-    try
-    {
-        mount_source = QString::fromLocal8Bit(mpu::snap_real_home_dir());
-    }
-    catch (const SnapEnvironmentException&)
-    {
-        mount_source = QDir::toNativeSeparators(QDir::homePath());
-    }
-
-    const auto mount_target = QString{"%1:%2"}.arg(petenv_name, home_automount_dir);
-
-    auto ret = run_cmd({"multipass", "mount", mount_source, mount_target}, parser, cout, cerr);
+    const auto full_mount_target = QString{"%1:%2"}.arg(instance_name, mount_target);
+    auto ret = run_cmd({"multipass", "mount", mount_source, full_mount_target}, parser, cout, cerr);
     if (ret == Ok)
-        cout << fmt::format("Mounted '{}' into '{}'\n", mount_source, mount_target);
+        cout << fmt::format("Mounted '{}' into '{}'\n", mount_source, full_mount_target);
 
     return ret;
 }

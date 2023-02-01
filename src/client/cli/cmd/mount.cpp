@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,11 +16,14 @@
  */
 
 #include "mount.h"
-#include "common_cli.h"
+
 #include "animated_spinner.h"
+#include "common_callbacks.h"
+#include "common_cli.h"
 
 #include <multipass/cli/argparser.h>
 #include <multipass/cli/client_platform.h>
+#include <multipass/exceptions/cmd_exceptions.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
 
@@ -35,6 +38,8 @@ namespace cmd = multipass::cmd;
 namespace
 {
 constexpr auto category = "mount cmd";
+const QString default_mount_type{"classic"};
+const QString native_mount_type{"native"};
 
 auto convert_id_for(const QString& id_string)
 {
@@ -45,6 +50,18 @@ auto convert_id_for(const QString& id_string)
         throw std::runtime_error(id_string.toStdString() + " is an invalid id");
 
     return id;
+}
+
+auto checked_mount_type(const QString& type)
+{
+    if (type == default_mount_type)
+        return mp::MountRequest_MountType_CLASSIC;
+
+    if (type == native_mount_type)
+        return mp::MountRequest_MountType_NATIVE;
+
+    throw mp::ValidationException{fmt::format("Bad mount type '{}' specified, please use '{}' or '{}'", type,
+                                              default_mount_type, native_mount_type)};
 }
 } // namespace
 
@@ -65,19 +82,10 @@ mp::ReturnCode cmd::Mount::run(mp::ArgParser* parser)
 
     auto on_failure = [this, &spinner](grpc::Status& status) {
         spinner.stop();
-
         return standard_failure_handler_for(name(), cerr, status);
     };
 
-    auto streaming_callback = [this, &spinner](mp::MountReply& reply) {
-        if (!reply.log_line().empty())
-        {
-            spinner.print(cerr, reply.log_line());
-        }
-
-        spinner.stop();
-        spinner.start(reply.mount_message());
-    };
+    auto streaming_callback = make_iterative_spinner_callback<MountRequest, MountReply>(spinner, *term);
 
     request.set_verbosity_level(parser->verbosityLevel());
 
@@ -120,7 +128,14 @@ mp::ParseCode cmd::Mount::parse_args(mp::ArgParser* parser)
                                     "<host> to <instance> inside the instance. Can be "
                                     "used multiple times.",
                                     "host>:<instance");
-    parser->addOptions({gid_mappings, uid_mappings});
+    QCommandLineOption mount_type_option({"t", "type"},
+                                         "Specify the type of mount to use.\n"
+                                         "Classic mounts use technology built into Multipass.\n"
+                                         "Native mounts use hypervisor and/or platform specific mounts.\n"
+                                         "Valid types are: \'classic\' (default) and \'native\'",
+                                         "type", default_mount_type);
+
+    parser->addOptions({gid_mappings, uid_mappings, mount_type_option});
 
     auto status = parser->commandParse(this);
     if (status != ParseCode::Ok)
@@ -157,25 +172,29 @@ mp::ParseCode cmd::Mount::parse_args(mp::ArgParser* parser)
     source_path = QDir(source_path).absolutePath();
     request.set_source_path(source_path.toStdString());
 
+    request.clear_target_paths();
     for (auto i = 1; i < parser->positionalArguments().count(); ++i)
     {
-        auto parsed_target = QString(parser->positionalArguments().at(i)).split(":", QString::SkipEmptyParts);
+        auto argument = parser->positionalArguments().at(i);
+        auto instance_name = argument.section(':', 0, 0, QString::SectionSkipEmpty);
+        auto target_path = argument.section(':', 1, -1, QString::SectionSkipEmpty);
 
         auto entry = request.add_target_paths();
-        entry->set_instance_name(parsed_target.at(0).toStdString());
+        entry->set_instance_name(instance_name.toStdString());
 
-        if (parsed_target.count() == 1)
+        if (target_path.isEmpty())
         {
             entry->set_target_path(source_path.toStdString());
         }
         else
         {
-            entry->set_target_path(parsed_target.at(1).toStdString());
+            entry->set_target_path(target_path.toStdString());
         }
     }
 
     QRegExp map_matcher("^([0-9]+[:][0-9]+)$");
 
+    request.clear_mount_maps();
     auto mount_maps = request.mutable_mount_maps();
 
     if (parser->isSet(uid_mappings))
@@ -208,6 +227,15 @@ mp::ParseCode cmd::Mount::parse_args(mp::ArgParser* parser)
             }
         }
     }
+    else
+    {
+        mpl::log(mpl::Level::debug, category,
+                 fmt::format("{}:{} {}(): adding default uid mapping", __FILE__, __LINE__, __FUNCTION__));
+
+        auto uid_pair = mount_maps->add_uid_mappings();
+        uid_pair->set_host_id(mcp::getuid());
+        uid_pair->set_instance_id(mp::default_id);
+    }
 
     if (parser->isSet(gid_mappings))
     {
@@ -239,19 +267,24 @@ mp::ParseCode cmd::Mount::parse_args(mp::ArgParser* parser)
             }
         }
     }
-
-    if (!parser->isSet(uid_mappings) && !parser->isSet(gid_mappings))
+    else
     {
         mpl::log(mpl::Level::debug, category,
-                 fmt::format("{}:{} {}(): adding default uid/gid mapping", __FILE__, __LINE__, __FUNCTION__));
-
-        auto uid_pair = mount_maps->add_uid_mappings();
-        uid_pair->set_host_id(mcp::getuid());
-        uid_pair->set_instance_id(mp::default_id);
+                 fmt::format("{}:{} {}(): adding default gid mapping", __FILE__, __LINE__, __FUNCTION__));
 
         auto gid_pair = mount_maps->add_gid_mappings();
         gid_pair->set_host_id(mcp::getgid());
         gid_pair->set_instance_id(mp::default_id);
+    }
+
+    try
+    {
+        request.set_mount_type(checked_mount_type(parser->value(mount_type_option).toLower()));
+    }
+    catch (mp::ValidationException& e)
+    {
+        cerr << "error: " << e.what() << "\n";
+        return ParseCode::CommandLineError;
     }
 
     return ParseCode::Ok;

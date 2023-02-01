@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,7 +32,7 @@ static auto reg = []() -> bool {
 }();
 } // namespace
 
-mp::BasicProcess::CustomQProcess::CustomQProcess(BasicProcess* p) : p{p}
+mp::BasicProcess::CustomQProcess::CustomQProcess(BasicProcess* p) : QProcess{p}, p{p}
 {
 }
 

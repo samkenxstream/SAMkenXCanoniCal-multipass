@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,29 +61,23 @@ QString latest_version_in(const QJsonObject& versions)
     return max_version;
 }
 
-QString derive_unpacked_file_path_prefix_from(const QString& image_location)
+QString derive_unpacked_file_path_prefix_from(const QString& image_location, const QString& image_suffix)
 {
     QFileInfo info{image_location};
-    auto file_name = info.fileName();
-    file_name.remove("-disk1.img");
-    file_name.remove(".img");
-
-    auto prefix = info.path();
-    prefix.append("/unpacked/");
-    prefix.append(file_name);
-
-    return prefix;
+    auto file_name = info.fileName().remove('-' + image_suffix).remove(".img");
+    return info.path().append("/unpacked/").append(file_name);
 }
-}
+} // namespace
 
-std::unique_ptr<mp::SimpleStreamsManifest> mp::SimpleStreamsManifest::fromJson(const QByteArray& json,
-                                                                               const QString& host_url)
+std::unique_ptr<mp::SimpleStreamsManifest>
+mp::SimpleStreamsManifest::fromJson(const QByteArray& json_from_official,
+                                    const std::optional<QByteArray>& json_from_mirror, const QString& host_url)
 {
-    const auto manifest = parse_manifest(json);
-    const auto updated = manifest["updated"].toString();
+    const auto manifest_from_official = parse_manifest(json_from_official);
+    const auto updated = manifest_from_official["updated"].toString();
 
-    const auto manifest_products = manifest["products"].toObject();
-    if (manifest_products.isEmpty())
+    const auto manifest_products_from_official = manifest_from_official["products"].toObject();
+    if (manifest_products_from_official.isEmpty())
         throw mp::GenericManifestException("No products found");
 
     auto arch = arch_to_manifest.value(QSysInfo::currentCpuArchitecture());
@@ -91,10 +85,21 @@ std::unique_ptr<mp::SimpleStreamsManifest> mp::SimpleStreamsManifest::fromJson(c
     if (arch.isEmpty())
         throw mp::GenericManifestException("Unsupported cloud image architecture");
 
-    std::vector<VMImageInfo> products;
-    for (const auto& value : manifest_products)
+    std::optional<QJsonObject> manifest_products_from_mirror = std::nullopt;
+    if (json_from_mirror)
     {
-        const auto product = value.toObject();
+        const auto manifest_from_mirror = parse_manifest(json_from_mirror.value());
+        const auto products_from_mirror = manifest_from_mirror["products"].toObject();
+        manifest_products_from_mirror = std::make_optional(products_from_mirror);
+    }
+
+    const QJsonObject manifest_products = manifest_products_from_mirror.value_or(manifest_products_from_official);
+
+    std::vector<VMImageInfo> products;
+    for (auto it = manifest_products.constBegin(); it != manifest_products.constEnd(); ++it)
+    {
+        const auto product_key = it.key();
+        const auto product = it.value();
 
         if (product["arch"].toString() != arch)
             continue;
@@ -115,6 +120,14 @@ std::unique_ptr<mp::SimpleStreamsManifest> mp::SimpleStreamsManifest::fromJson(c
         {
             const auto version_string = it.key();
             const auto version = versions[version_string].toObject();
+            const auto version_from_official = manifest_products_from_official[product_key]
+                                                   .toObject()["versions"]
+                                                   .toObject()[version_string]
+                                                   .toObject();
+
+            if (version != version_from_official)
+                continue;
+
             const auto items = version["items"].toObject();
             if (items.isEmpty())
                 continue;
@@ -140,14 +153,15 @@ std::unique_ptr<mp::SimpleStreamsManifest> mp::SimpleStreamsManifest::fromJson(c
             }
             else
             {
-                image = items["disk1.img"].toObject();
+                const auto image_key = items.contains("uefi1.img") ? "uefi1.img" : "disk1.img";
+                image = items[image_key].toObject();
                 image_location = image["path"].toString();
                 sha256 = image["sha256"].toString();
                 size = image["size"].toInt(-1);
 
                 // NOTE: These are not defined in the manifest itself
                 // so they are not guaranteed to be correct or exist in the server
-                const auto prefix = derive_unpacked_file_path_prefix_from(image_location);
+                const auto prefix = derive_unpacked_file_path_prefix_from(image_location, image_key);
                 kernel_location = prefix + "-vmlinuz-generic";
                 initrd_location = prefix + "-initrd-generic";
             }

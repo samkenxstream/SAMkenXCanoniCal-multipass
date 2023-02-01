@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,7 +29,7 @@
 
 namespace mpu = multipass::utils;
 
-std::string make_instance_json(const mp::optional<std::string>& default_mac,
+std::string make_instance_json(const std::optional<std::string>& default_mac,
                                const std::vector<mp::NetworkInterface>& extra_ifaces,
                                const std::vector<std::string>& extra_instances)
 {
@@ -137,5 +137,47 @@ void check_interfaces_in_json(const QString& file, const std::string& mac,
         ASSERT_EQ(interface["id"].toString().toStdString(), it->id);
         ASSERT_EQ(interface["auto_mode"].toBool(), it->auto_mode);
         ++it;
+    }
+}
+
+void check_mounts_in_json(const QString& file, std::unordered_map<std::string, mp::VMMount>& mounts)
+{
+    QByteArray json = mpt::load(file);
+
+    QJsonParseError parse_error;
+    const auto doc = QJsonDocument::fromJson(json, &parse_error);
+    EXPECT_FALSE(doc.isNull());
+    EXPECT_TRUE(doc.isObject());
+
+    const auto doc_object = doc.object();
+    const auto instance_object = doc_object["real-zebraphant"].toObject();
+    const auto json_mounts = instance_object["mounts"].toArray();
+    ASSERT_EQ(json_mounts.count(), mounts.size());
+
+    for (const auto& json_mount : json_mounts)
+    {
+        const auto& json_target_path = json_mount["target_path"].toString().toStdString();
+        const auto& json_source_path = json_mount["source_path"].toString().toStdString();
+        const auto& json_uid_mapping = json_mount["uid_mappings"].toArray();
+        const auto& json_gid_mapping = json_mount["gid_mappings"].toArray();
+
+        ASSERT_EQ(mounts.count(json_target_path), 1);
+        const auto& original_mount = mounts[json_target_path];
+
+        ASSERT_EQ(original_mount.source_path, json_source_path);
+
+        ASSERT_EQ(json_uid_mapping.count(), original_mount.uid_mappings.size());
+        for (auto i = 0; i < json_uid_mapping.count(); ++i)
+        {
+            ASSERT_EQ(json_uid_mapping[i]["host_uid"], original_mount.uid_mappings[i].first);
+            ASSERT_EQ(json_uid_mapping[i]["instance_uid"], original_mount.uid_mappings[i].second);
+        }
+
+        ASSERT_EQ(json_gid_mapping.count(), original_mount.gid_mappings.size());
+        for (auto i = 0; i < json_gid_mapping.count(); ++i)
+        {
+            ASSERT_EQ(json_gid_mapping[i]["host_gid"], original_mount.gid_mappings[i].first);
+            ASSERT_EQ(json_gid_mapping[i]["instance_gid"], original_mount.gid_mappings[i].second);
+        }
     }
 }

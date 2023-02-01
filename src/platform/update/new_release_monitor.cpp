@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -115,7 +115,7 @@ mp::NewReleaseMonitor::NewReleaseMonitor(const QString& current_version,
 
 mp::NewReleaseMonitor::~NewReleaseMonitor() = default;
 
-mp::optional<mp::NewReleaseInfo> mp::NewReleaseMonitor::get_new_release() const
+std::optional<mp::NewReleaseInfo> mp::NewReleaseMonitor::get_new_release() const
 {
     return new_release;
 }

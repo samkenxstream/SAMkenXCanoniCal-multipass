@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@ struct SSLCertProvider : public testing::Test
 {
     SSLCertProvider()
     {
-        cert_dir = mp::utils::make_dir(temp_dir.path(), "test-cert");
+        cert_dir = MP_UTILS.make_dir(temp_dir.path(), "test-cert");
     }
     mpt::TempDir temp_dir;
     mp::Path cert_dir;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 #ifndef MULTIPASS_FILE_OPS_H
 #define MULTIPASS_FILE_OPS_H
 
+#include "recursive_dir_iterator.h"
 #include "singleton.h"
 
 #include <QByteArray>
@@ -27,21 +28,30 @@
 #include <QString>
 #include <QTextStream>
 
+#include <filesystem>
 #include <fstream>
 
 #define MP_FILEOPS multipass::FileOps::instance()
 
 namespace multipass
 {
+namespace fs = std::filesystem;
+
 class FileOps : public Singleton<FileOps>
 {
 public:
     FileOps(const Singleton<FileOps>::PrivatePass&) noexcept;
 
     // QDir operations
+    virtual bool exists(const QDir& dir) const;
     virtual bool isReadable(const QDir& dir) const;
     virtual bool mkpath(const QDir& dir, const QString& dirName) const;
     virtual bool rmdir(QDir& dir, const QString& dirName) const;
+
+    // QFileInfo operations
+    virtual bool exists(const QFileInfo& file) const;
+    virtual bool isDir(const QFileInfo& file) const;
+    virtual bool isReadable(const QFileInfo& file) const;
 
     // QFile operations
     virtual bool exists(const QFile& file) const;
@@ -65,6 +75,19 @@ public:
 
     // std operations
     virtual void open(std::fstream& stream, const char* filename, std::ios_base::openmode mode) const;
+    virtual std::unique_ptr<std::ostream> open_write(const fs::path& path) const;
+    virtual std::unique_ptr<std::istream> open_read(const fs::path& path) const;
+    virtual bool exists(const fs::path& path, std::error_code& err) const;
+    virtual bool is_directory(const fs::path& path, std::error_code& err) const;
+    virtual bool create_directory(const fs::path& path, std::error_code& err) const;
+    virtual bool create_directories(const fs::path& path, std::error_code& err) const;
+    virtual bool remove(const fs::path& path, std::error_code& err) const;
+    virtual void create_symlink(const fs::path& to, const fs::path& path, std::error_code& err) const;
+    virtual fs::path read_symlink(const fs::path& path, std::error_code& err) const;
+    virtual void permissions(const fs::path& path, fs::perms perms, std::error_code& err) const;
+    virtual fs::file_status status(const fs::path& path, std::error_code& err) const;
+    virtual std::unique_ptr<RecursiveDirIterator> recursive_dir_iterator(const fs::path& path,
+                                                                         std::error_code& err) const;
 };
 } // namespace multipass
 

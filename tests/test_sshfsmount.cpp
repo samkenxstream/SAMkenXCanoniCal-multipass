@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,11 +21,11 @@
 #include "sftp_server_test_fixture.h"
 #include "signal.h"
 
+#include <src/sshfs_mount/sshfs_mount.h>
+
 #include <multipass/exceptions/sshfs_missing_error.h>
 #include <multipass/logging/log.h>
-#include <multipass/optional.h>
 #include <multipass/ssh/ssh_session.h>
-#include <multipass/sshfs_mount/sshfs_mount.h>
 #include <multipass/utils.h>
 
 #include <algorithm>
@@ -46,7 +46,7 @@ namespace
 {
 struct SshfsMount : public mp::test::SftpServerTest
 {
-    mp::SshfsMount make_sshfsmount(mp::optional<std::string> target = mp::nullopt)
+    mp::SshfsMount make_sshfsmount(std::optional<std::string> target = std::nullopt)
     {
         mp::SSHSession session{"a", 42};
         return {std::move(session), default_source, target.value_or(default_target), default_mappings,
@@ -75,8 +75,8 @@ struct SshfsMount : public mp::test::SftpServerTest
     // cooperate better, i.e., make the reader read only when a command was issued.
     auto make_exec_to_check_commands(const CommandVector& commands, std::string::size_type& remaining,
                                      CommandVector::const_iterator& next_expected_cmd, std::string& output,
-                                     bool& invoked, mp::optional<std::string>& fail_cmd,
-                                     mp::optional<bool>& fail_invoked)
+                                     bool& invoked, std::optional<std::string>& fail_cmd,
+                                     std::optional<bool>& fail_invoked)
     {
         *fail_invoked = false;
 
@@ -153,9 +153,9 @@ struct SshfsMount : public mp::test::SftpServerTest
         return channel_read;
     }
 
-    void test_command_execution(const CommandVector& commands, mp::optional<std::string> target = mp::nullopt,
-                                mp::optional<std::string> fail_cmd = mp::nullopt,
-                                mp::optional<bool> fail_invoked = mp::nullopt)
+    void test_command_execution(const CommandVector& commands, std::optional<std::string> target = std::nullopt,
+                                std::optional<std::string> fail_cmd = std::nullopt,
+                                std::optional<bool> fail_invoked = std::nullopt)
     {
         bool invoked{false};
         std::string output;
@@ -240,8 +240,8 @@ TEST_P(SshfsMountFail, test_failed_invocation)
 
     CommandVector empty;
     CommandVector::const_iterator it = empty.end();
-    mp::optional<std::string> fail_cmd = mp::make_optional(GetParam());
-    mp::optional<bool> invoked_fail = mp::make_optional(false);
+    std::optional<std::string> fail_cmd = std::make_optional(GetParam());
+    std::optional<bool> invoked_fail = std::make_optional(false);
     auto request_exec = make_exec_to_check_commands(empty, remaining, it, output, invoked_cmd, fail_cmd, invoked_fail);
     REPLACE(ssh_channel_request_exec, request_exec);
 
@@ -414,90 +414,4 @@ TEST_F(SshfsMount, blank_fuse_version_logs_error)
                         StrEq("Unable to parse the FUSE library version: FUSE library version:"))));
 
     test_command_execution(commands);
-}
-
-TEST_F(SshfsMount, throws_install_sshfs_which_snap_fails)
-{
-    bool invoked{false};
-    auto request_exec = make_exec_that_fails_for({"which snap"}, invoked);
-    REPLACE(ssh_channel_request_exec, request_exec);
-
-    mp::SSHSession session{"a", 42};
-
-    EXPECT_THROW(mp::utils::install_sshfs_for("foo", session), std::runtime_error);
-    EXPECT_TRUE(invoked);
-}
-
-TEST_F(SshfsMount, throws_install_sshfs_no_snap_dir_fails)
-{
-    bool invoked{false};
-    auto request_exec = make_exec_that_fails_for({"[ -e /snap ]"}, invoked);
-    REPLACE(ssh_channel_request_exec, request_exec);
-
-    mp::SSHSession session{"a", 42};
-
-    EXPECT_THROW(mp::utils::install_sshfs_for("foo", session), std::runtime_error);
-    EXPECT_TRUE(invoked);
-}
-
-TEST_F(SshfsMount, throws_install_sshfs_snap_install_fails)
-{
-    bool invoked{false};
-    auto request_exec = make_exec_that_fails_for({"sudo snap install multipass-sshfs"}, invoked);
-    REPLACE(ssh_channel_request_exec, request_exec);
-
-    mp::SSHSession session{"a", 42};
-
-    EXPECT_THROW(mp::utils::install_sshfs_for("foo", session), mp::SSHFSMissingError);
-    EXPECT_TRUE(invoked);
-}
-
-TEST_F(SshfsMount, install_sshfs_no_failures_does_not_throw)
-{
-    mp::SSHSession session{"a", 42};
-
-    EXPECT_NO_THROW(mp::utils::install_sshfs_for("foo", session));
-}
-
-TEST_F(SshfsMount, install_sshfs_timeout_logs_info)
-{
-    ssh_channel_callbacks callbacks{nullptr};
-    bool sleep{false};
-
-    auto request_exec = [&sleep](ssh_channel, const char* raw_cmd) {
-        std::string cmd{raw_cmd};
-        if (cmd == "sudo snap install multipass-sshfs")
-            sleep = true;
-
-        return SSH_OK;
-    };
-    REPLACE(ssh_channel_request_exec, request_exec);
-
-    auto add_channel_cbs = [&callbacks](ssh_channel, ssh_channel_callbacks cb) mutable {
-        callbacks = cb;
-        return SSH_OK;
-    };
-    REPLACE(ssh_add_channel_callbacks, add_channel_cbs);
-
-    auto event_dopoll = [&callbacks, &sleep](ssh_event, int timeout) {
-        if (!callbacks)
-            return SSH_ERROR;
-
-        if (sleep)
-            std::this_thread::sleep_for(std::chrono::milliseconds(timeout + 1));
-        else
-            callbacks->channel_exit_status_function(nullptr, nullptr, 0, callbacks->userdata);
-
-        return SSH_OK;
-    };
-    REPLACE(ssh_event_dopoll, event_dopoll);
-
-    logger_scope.mock_logger->screen_logs(mpl::Level::error);
-    EXPECT_CALL(*logger_scope.mock_logger,
-                log(Eq(mpl::Level::info), mpt::MockLogger::make_cstring_matcher(StrEq("utils")),
-                    mpt::MockLogger::make_cstring_matcher(StrEq("Timeout while installing 'sshfs' in 'foo'"))));
-
-    mp::SSHSession session{"a", 42};
-
-    mp::utils::install_sshfs_for("foo", session, std::chrono::milliseconds(1));
 }

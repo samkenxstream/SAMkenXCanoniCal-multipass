@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -57,7 +57,7 @@ public:
 private:
     const QString name;
     const std::string username;
-    multipass::optional<int> port;
+    std::optional<int> port;
     VMStatusMonitor* monitor;
     bool update_shutdown_status{true};
     NetworkAccessManager* manager;

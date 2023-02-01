@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -196,11 +196,12 @@ TEST_P(IpExecution, get_all_ipv4_works_when_ssh_works)
 INSTANTIATE_TEST_SUITE_P(
     BaseVM, IpExecution,
     Values(IpTestParams{0, "eth0             UP             192.168.2.168/24 \n", {"192.168.2.168"}},
+           IpTestParams{0, "eth1             UP             192.168.2.169/24 metric 100 \n", {"192.168.2.169"}},
            IpTestParams{0,
                         "wlp4s0           UP             192.168.2.8/24 \n"
                         "virbr0           DOWN           192.168.3.1/24 \n"
                         "tun0             UNKNOWN        10.172.66.5/18 \n",
                         {"192.168.2.8", "192.168.3.1", "10.172.66.5"}},
-           IpTestParams{0, "", {}}, IpTestParams{127, "ip: command not found\n", {}}));
+           IpTestParams{0, "", {}}));
 
 } // namespace

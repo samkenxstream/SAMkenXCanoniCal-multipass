@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,10 +20,30 @@
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+
+#include <filesystem>
+
+#include <QByteArray>
+#include <QProcess>
 #include <QString>
 
 namespace fmt
 {
+template <>
+struct formatter<QByteArray>
+{
+    template <typename ParseContext>
+    constexpr auto parse(ParseContext& ctx)
+    {
+        return ctx.begin();
+    }
+
+    template <typename FormatContext>
+    auto format(const QByteArray& a, FormatContext& ctx) const
+    {
+        return format_to(ctx.out(), "{}", a.toStdString()); // TODO: remove the copy?
+    }
+};
 
 template <>
 struct formatter<QString>
@@ -35,13 +55,28 @@ struct formatter<QString>
     }
 
     template <typename FormatContext>
-    auto format(const QString& a, FormatContext& ctx)
+    auto format(const QString& a, FormatContext& ctx) const
     {
         return format_to(ctx.out(), "{}", a.toStdString()); // TODO: remove the copy?
     }
 };
 
-} // namespace fmt
+template <>
+struct formatter<QProcess::ExitStatus>
+{
+    template <typename ParseContext>
+    constexpr auto parse(ParseContext& ctx)
+    {
+        return ctx.begin();
+    }
 
+    template <typename FormatContext>
+    auto format(const QProcess::ExitStatus& exit_status, FormatContext& ctx) const
+    {
+        return format_to(ctx.out(), "{}", static_cast<int>(exit_status));
+    }
+};
+
+} // namespace fmt
 
 #endif // MULTIPASS_FORMAT_H

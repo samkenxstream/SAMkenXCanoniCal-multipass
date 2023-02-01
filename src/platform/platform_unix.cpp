@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,6 +61,11 @@ int mp::platform::Platform::chown(const char* path, unsigned int uid, unsigned i
 int mp::platform::Platform::chmod(const char* path, unsigned int mode) const
 {
     return ::chmod(path, mode);
+}
+
+bool mp::platform::Platform::set_permissions(const mp::Path path, const QFileDevice::Permissions permissions) const
+{
+    return QFile::setPermissions(path, permissions);
 }
 
 bool mp::platform::Platform::symlink(const char* target, const char* link, bool is_dir) const

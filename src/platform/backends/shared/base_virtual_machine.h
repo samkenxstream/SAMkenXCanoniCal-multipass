@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 #ifndef MULTIPASS_BASE_VIRTUAL_MACHINE_H
 #define MULTIPASS_BASE_VIRTUAL_MACHINE_H
 
+#include <multipass/exceptions/not_implemented_on_this_backend_exception.h>
 #include <multipass/logging/log.h>
 #include <multipass/ssh/ssh_session.h>
 #include <multipass/utils.h>
@@ -41,6 +42,12 @@ public:
     BaseVirtualMachine(const std::string& vm_name) : VirtualMachine(vm_name){};
 
     std::vector<std::string> get_all_ipv4(const SSHKeyProvider& key_provider) override;
+    std::unique_ptr<MountHandler> make_native_mount_handler(const SSHKeyProvider* ssh_key_provider,
+                                                            const std::string& target,
+                                                            const multipass::VMMount& mount) override
+    {
+        throw NotImplementedOnThisBackendException("native mounts");
+    };
 };
 } // namespace multipass
 

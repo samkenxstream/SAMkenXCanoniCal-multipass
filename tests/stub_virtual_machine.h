@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 #ifndef MULTIPASS_STUB_VIRTUAL_MACHINE_H
 #define MULTIPASS_STUB_VIRTUAL_MACHINE_H
 
+#include <multipass/mount_handler.h>
 #include <multipass/virtual_machine.h>
 
 namespace multipass
@@ -26,7 +27,7 @@ namespace test
 {
 struct StubVirtualMachine final : public multipass::VirtualMachine
 {
-    StubVirtualMachine() : VirtualMachine{""}
+    StubVirtualMachine() : VirtualMachine{"stub"}
     {
     }
 
@@ -104,6 +105,13 @@ struct StubVirtualMachine final : public multipass::VirtualMachine
 
     void resize_disk(const MemorySize&) override
     {
+    }
+
+    std::unique_ptr<MountHandler> make_native_mount_handler(const SSHKeyProvider* ssh_key_provider,
+                                                            const std::string& target, const VMMount& mount) override
+    {
+        // TODO replace with StubMountHandler when writing tests
+        throw std::runtime_error{"StubMountHandler will be added later"};
     }
 };
 } // namespace test

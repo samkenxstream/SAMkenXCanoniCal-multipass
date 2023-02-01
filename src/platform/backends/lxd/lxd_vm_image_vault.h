@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,8 +49,8 @@ public:
     MemorySize minimum_image_size_for(const std::string& id) override;
 
 private:
-    void lxd_download_image(const QString& id, const QString& stream_location, const Query& query,
-                            const ProgressMonitor& monitor, const QString& last_used = QString());
+    void lxd_download_image(const VMImageInfo& info, const Query& query, const ProgressMonitor& monitor,
+                            const QString& last_used = QString());
     void url_download_image(const VMImageInfo& info, const QString& image_path, const ProgressMonitor& monitor);
     void poll_download_operation(const QJsonObject& json_reply, const ProgressMonitor& monitor);
     std::string lxd_import_metadata_and_image(const QString& metadata_path, const QString& image_path);

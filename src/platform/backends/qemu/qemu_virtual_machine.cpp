@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
  */
 
 #include "qemu_virtual_machine.h"
+#include "qemu_mount_handler.h"
 #include "qemu_vm_process_spec.h"
 #include "qemu_vmstate_process_spec.h"
 
@@ -28,6 +29,7 @@
 #include <multipass/platform.h>
 #include <multipass/process/simple_process_spec.h>
 #include <multipass/utils.h>
+#include <multipass/vm_mount.h>
 #include <multipass/vm_status_monitor.h>
 
 #include <QFile>
@@ -51,6 +53,9 @@ namespace
 constexpr auto suspend_tag = "suspend";
 constexpr auto machine_type_key = "machine_type";
 constexpr auto arguments_key = "arguments";
+constexpr auto mount_data_key = "mount_data";
+constexpr auto mount_source_key = "source";
+constexpr auto mount_arguments_key = "arguments";
 
 bool use_cdrom_set(const QJsonObject& metadata)
 {
@@ -81,15 +86,32 @@ QStringList get_arguments(const QJsonObject& metadata)
     return args;
 }
 
-auto make_qemu_process(const mp::VirtualMachineDescription& desc, const mp::optional<QJsonObject>& resume_metadata,
-                       const QStringList& platform_args)
+auto mount_args_from_json(const QJsonObject& object)
+{
+    mp::QemuVirtualMachine::MountArgs mount_args;
+    auto mount_data_map = object[mount_data_key].toObject();
+    for (const auto& tag : mount_data_map.keys())
+    {
+        const auto mount_data = mount_data_map[tag].toObject();
+        const auto source = mount_data[mount_source_key];
+        const auto args = mount_data[mount_arguments_key].toArray();
+        if (!source.isString() || !std::all_of(args.begin(), args.end(), std::mem_fn(&QJsonValue::isString)))
+            continue;
+        mount_args[tag.toStdString()] = {source.toString().toStdString(),
+                                         QVariant{args.toVariantList()}.toStringList()};
+    }
+    return mount_args;
+}
+
+auto make_qemu_process(const mp::VirtualMachineDescription& desc, const std::optional<QJsonObject>& resume_metadata,
+                       const mp::QemuVirtualMachine::MountArgs& mount_args, const QStringList& platform_args)
 {
     if (!QFile::exists(desc.image.image_path) || !QFile::exists(desc.cloud_init_iso))
     {
         throw std::runtime_error("cannot start VM without an image");
     }
 
-    mp::optional<mp::QemuVMProcessSpec::ResumeData> resume_data;
+    std::optional<mp::QemuVMProcessSpec::ResumeData> resume_data;
     if (resume_metadata)
     {
         const auto& data = resume_metadata.value();
@@ -97,7 +119,7 @@ auto make_qemu_process(const mp::VirtualMachineDescription& desc, const mp::opti
                                                         get_arguments(data)};
     }
 
-    auto process_spec = std::make_unique<mp::QemuVMProcessSpec>(desc, platform_args, resume_data);
+    auto process_spec = std::make_unique<mp::QemuVMProcessSpec>(desc, platform_args, mount_args, resume_data);
     auto process = mp::platform::make_process(std::move(process_spec));
 
     mpl::log(mpl::Level::debug, desc.vm_name, fmt::format("process working dir '{}'", process->working_directory()));
@@ -174,11 +196,25 @@ auto get_qemu_machine_type(const QStringList& platform_args)
     return machine_type;
 }
 
-auto generate_metadata(const QStringList& platform_args, const QStringList& proc_args)
+auto mount_args_to_json(const mp::QemuVirtualMachine::MountArgs& mount_args)
+{
+    QJsonObject object;
+    for (const auto& [tag, mount_data] : mount_args)
+    {
+        const auto& [source, args] = mount_data;
+        object[QString::fromStdString(tag)] = QJsonObject{{mount_source_key, QString::fromStdString(source)},
+                                                          {mount_arguments_key, QJsonArray::fromStringList(args)}};
+    }
+    return object;
+}
+
+auto generate_metadata(const QStringList& platform_args, const QStringList& proc_args,
+                       const mp::QemuVirtualMachine::MountArgs& mount_args)
 {
     QJsonObject metadata;
     metadata[machine_type_key] = get_qemu_machine_type(platform_args);
     metadata[arguments_key] = QJsonArray::fromStringList(proc_args);
+    metadata[mount_data_key] = mount_args_to_json(mount_args);
     return metadata;
 }
 } // namespace
@@ -191,7 +227,8 @@ mp::QemuVirtualMachine::QemuVirtualMachine(const VirtualMachineDescription& desc
       mac_addr{desc.default_mac_address},
       username{desc.ssh_username},
       qemu_platform{qemu_platform},
-      monitor{&monitor}
+      monitor{&monitor},
+      mount_args{mount_args_from_json(monitor.retrieve_metadata_for(vm_name))}
 {
     QObject::connect(
         this, &QemuVirtualMachine::on_delete_memory_snapshot, this,
@@ -244,12 +281,6 @@ mp::QemuVirtualMachine::~QemuVirtualMachine()
 
 void mp::QemuVirtualMachine::start()
 {
-    if (state == State::running)
-        return;
-
-    if (state == State::suspending)
-        throw std::runtime_error("cannot start the instance while suspending");
-
     initialize_vm_process();
 
     if (state == State::suspended)
@@ -262,11 +293,18 @@ void mp::QemuVirtualMachine::start()
     }
     else
     {
-        monitor->update_metadata_for(
-            vm_name, generate_metadata(qemu_platform->vmstate_platform_args(), vm_process->arguments()));
+        // remove the mount arguments from the rest of the arguments, as they are stored separately for easier retrieval
+        auto proc_args = vm_process->arguments();
+        for (const auto& [_, mount_data] : mount_args)
+            for (const auto& arg : mount_data.second)
+                proc_args.removeOne(arg);
+
+        monitor->update_metadata_for(vm_name,
+                                     generate_metadata(qemu_platform->vmstate_platform_args(), proc_args, mount_args));
     }
 
     vm_process->start();
+
     if (!vm_process->wait_for_started())
     {
         auto process_state = vm_process->process_state();
@@ -357,7 +395,7 @@ void mp::QemuVirtualMachine::update_state()
 
 void mp::QemuVirtualMachine::on_started()
 {
-    state = State::starting;
+    state = VirtualMachine::State::starting;
     update_state();
     monitor->on_resume();
 }
@@ -382,7 +420,7 @@ void mp::QemuVirtualMachine::on_shutdown()
         state_wait.wait(lock, [this] { return shutdown_while_starting; });
     }
 
-    management_ip = nullopt;
+    management_ip = std::nullopt;
     update_state();
     vm_process.reset(nullptr);
     lock.unlock();
@@ -400,7 +438,7 @@ void mp::QemuVirtualMachine::on_restart()
     state = State::restarting;
     update_state();
 
-    management_ip = nullopt;
+    management_ip = std::nullopt;
 
     monitor->on_restart(vm_name);
 }
@@ -428,7 +466,7 @@ void mp::QemuVirtualMachine::ensure_vm_is_running()
 
 std::string mp::QemuVirtualMachine::ssh_hostname(std::chrono::milliseconds timeout)
 {
-    auto get_ip = [this]() -> optional<IPAddress> { return qemu_platform->get_ip_for(mac_addr); };
+    auto get_ip = [this]() -> std::optional<IPAddress> { return qemu_platform->get_ip_for(mac_addr); };
 
     return mp::backend::ip_address_for(this, get_ip, timeout);
 }
@@ -470,8 +508,9 @@ void mp::QemuVirtualMachine::wait_until_ssh_up(std::chrono::milliseconds timeout
 void mp::QemuVirtualMachine::initialize_vm_process()
 {
     vm_process = make_qemu_process(
-        desc, ((state == State::suspended) ? mp::make_optional(monitor->retrieve_metadata_for(vm_name)) : mp::nullopt),
-        qemu_platform->vm_platform_args(desc));
+        desc,
+        ((state == State::suspended) ? std::make_optional(monitor->retrieve_metadata_for(vm_name)) : std::nullopt),
+        mount_args, qemu_platform->vm_platform_args(desc));
 
     QObject::connect(vm_process.get(), &Process::started, [this]() {
         mpl::log(mpl::Level::info, vm_name, "process started");
@@ -581,4 +620,16 @@ void mp::QemuVirtualMachine::resize_disk(const MemorySize& new_size)
 
     mp::backend::resize_instance_image(new_size, desc.image.image_path);
     desc.disk_space = new_size;
+}
+
+mp::MountHandler::UPtr mp::QemuVirtualMachine::make_native_mount_handler(const SSHKeyProvider* ssh_key_provider,
+                                                                         const std::string& target,
+                                                                         const VMMount& mount)
+{
+    return std::make_unique<QemuMountHandler>(this, ssh_key_provider, target, mount);
+}
+
+mp::QemuVirtualMachine::MountArgs& mp::QemuVirtualMachine::modifiable_mount_args()
+{
+    return mount_args;
 }

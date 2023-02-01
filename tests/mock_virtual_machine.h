@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 #include "common.h"
 
 #include <multipass/memory_size.h>
+#include <multipass/mount_handler.h>
 #include <multipass/virtual_machine.h>
 
 using namespace testing;
@@ -61,6 +62,8 @@ struct MockVirtualMachine : public multipass::VirtualMachine
     MOCK_METHOD1(update_cpus, void(int num_cores));
     MOCK_METHOD1(resize_memory, void(const MemorySize& new_size));
     MOCK_METHOD1(resize_disk, void(const MemorySize& new_size));
+    MOCK_METHOD(std::unique_ptr<MountHandler>, make_native_mount_handler,
+                (const SSHKeyProvider* ssh_key_provider, const std::string& target, const VMMount& mount), (override));
 };
 } // namespace test
 } // namespace multipass

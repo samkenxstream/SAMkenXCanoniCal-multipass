@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -48,6 +48,10 @@ std::string mp::YamlFormatter::format(const InfoReply& reply) const
             instance_node["release"] = YAML::Null;
         else
             instance_node["release"] = info.current_release();
+
+        instance_node["cpu_count"] = YAML::Null;
+        if (!info.cpu_count().empty())
+            instance_node["cpu_count"] = info.cpu_count();
 
         if (!info.load().empty())
         {
@@ -134,7 +138,8 @@ std::string mp::YamlFormatter::format(const ListReply& reply) const
         for (const auto& ip : instance.ipv4())
             instance_node["ipv4"].push_back(ip);
 
-        instance_node["release"] = instance.current_release();
+        instance_node["release"] =
+            instance.current_release().empty() ? "Not Available" : fmt::format("Ubuntu {}", instance.current_release());
 
         list[instance.name()].push_back(instance_node);
     }
@@ -225,6 +230,7 @@ std::string mp::YamlFormatter::format(const mp::AliasDict& aliases) const
         alias_node["alias"] = alias;
         alias_node["command"] = def.command;
         alias_node["instance"] = def.instance;
+        alias_node["working-directory"] = def.working_directory;
 
         aliases_node.push_back(alias_node);
     }

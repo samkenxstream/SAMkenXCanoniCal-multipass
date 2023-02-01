@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,9 +20,11 @@
 #include "file_operations.h"
 #include "mock_cert_provider.h"
 #include "mock_cert_store.h"
+#include "mock_client_rpc.h"
 #include "mock_daemon.h"
 #include "mock_standard_paths.h"
 #include "mock_utils.h"
+#include "stub_terminal.h"
 #include "temp_dir.h"
 
 #include <multipass/cli/client_common.h>
@@ -64,7 +66,7 @@ struct TestClientCommon : public mpt::DaemonTestFixture
 
 TEST_F(TestClientCommon, usesCommonCertWhenItExists)
 {
-    const auto common_cert_dir = mp::utils::make_dir(temp_dir.path(), QString(mp::common_client_cert_dir).remove(0, 1));
+    const auto common_cert_dir = MP_UTILS.make_dir(temp_dir.path(), QString(mp::common_client_cert_dir).remove(0, 1));
     const auto common_client_cert_file = common_cert_dir + "/" + mp::client_cert_file;
     const auto common_client_key_file = common_cert_dir + "/" + mp::client_key_file;
 
@@ -77,7 +79,7 @@ TEST_F(TestClientCommon, usesCommonCertWhenItExists)
 TEST_F(TestClientCommon, usesExistingGuiCert)
 {
     const auto common_cert_dir = temp_dir.path() + mp::common_client_cert_dir;
-    const auto gui_cert_dir = mp::utils::make_dir(temp_dir.path(), QString(mp::gui_client_cert_dir).remove(0, 1));
+    const auto gui_cert_dir = MP_UTILS.make_dir(temp_dir.path(), QString(mp::gui_client_cert_dir).remove(0, 1));
     const auto gui_client_cert_file = gui_cert_dir + "/" + mp::client_cert_file;
     const auto gui_client_key_file = gui_cert_dir + "/" + mp::client_key_file;
 
@@ -93,10 +95,10 @@ TEST_F(TestClientCommon, usesExistingGuiCert)
 TEST_F(TestClientCommon, failsGuiCertUsesExistingCliCert)
 {
     const auto common_cert_dir = temp_dir.path() + mp::common_client_cert_dir;
-    const auto gui_cert_dir = mp::utils::make_dir(temp_dir.path(), QString(mp::gui_client_cert_dir).remove(0, 1));
+    const auto gui_cert_dir = MP_UTILS.make_dir(temp_dir.path(), QString(mp::gui_client_cert_dir).remove(0, 1));
     const auto gui_client_cert_file = gui_cert_dir + "/" + mp::client_cert_file;
     const auto gui_client_key_file = gui_cert_dir + "/" + mp::client_key_file;
-    const auto cli_cert_dir = mp::utils::make_dir(temp_dir.path(), QString(mp::cli_client_cert_dir).remove(0, 1));
+    const auto cli_cert_dir = MP_UTILS.make_dir(temp_dir.path(), QString(mp::cli_client_cert_dir).remove(0, 1));
     const auto cli_client_cert_file = cli_cert_dir + "/" + mp::client_cert_file;
     const auto cli_client_key_file = cli_cert_dir + "/" + mp::client_key_file;
 
@@ -119,10 +121,10 @@ TEST_F(TestClientCommon, failsGuiCertUsesExistingCliCert)
 TEST_F(TestClientCommon, noValidCertsCreatesNewCommonCert)
 {
     const auto common_cert_dir = temp_dir.path() + mp::common_client_cert_dir;
-    const auto gui_cert_dir = mp::utils::make_dir(temp_dir.path(), QString(mp::gui_client_cert_dir).remove(0, 1));
+    const auto gui_cert_dir = MP_UTILS.make_dir(temp_dir.path(), QString(mp::gui_client_cert_dir).remove(0, 1));
     const auto gui_client_cert_file = gui_cert_dir + "/" + mp::client_cert_file;
     const auto gui_client_key_file = gui_cert_dir + "/" + mp::client_key_file;
-    const auto cli_cert_dir = mp::utils::make_dir(temp_dir.path(), QString(mp::cli_client_cert_dir).remove(0, 1));
+    const auto cli_cert_dir = MP_UTILS.make_dir(temp_dir.path(), QString(mp::cli_client_cert_dir).remove(0, 1));
     const auto cli_client_cert_file = cli_cert_dir + "/" + mp::client_cert_file;
     const auto cli_client_key_file = cli_cert_dir + "/" + mp::client_key_file;
 
@@ -142,4 +144,19 @@ TEST_F(TestClientCommon, noValidCertsCreatesNewCommonCert)
     EXPECT_TRUE(QFile::exists(common_cert_dir + "/" + mp::client_key_file));
     EXPECT_FALSE(QFile::exists(gui_cert_dir));
     EXPECT_FALSE(QFile::exists(cli_cert_dir));
+}
+
+TEST(TestClientHandleUserPassword, defaultHasNoUsernameAndPassword)
+{
+    auto client = std::make_unique<mpt::MockClientReaderWriter<mp::MountRequest, mp::MountReply>>();
+    std::stringstream trash_stream;
+    mpt::StubTerminal term(trash_stream, trash_stream, trash_stream);
+
+    EXPECT_CALL(*client, Write(Property(&mp::MountRequest::user_credentials,
+                                        AllOf(Property(&mp::UserCredentials::username, IsEmpty()),
+                                              Property(&mp::UserCredentials::password, IsEmpty()))),
+                               _))
+        .Times(1);
+
+    mp::cmd::handle_user_password(client.get(), &term);
 }

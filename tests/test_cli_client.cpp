@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,31 +15,41 @@
  *
  */
 
+#include "mock_ssh_test_fixture.h"
+
 #include "common.h"
 #include "disabling_macros.h"
 #include "fake_alias_config.h"
+#include "fake_key_data.h"
 #include "mock_cert_provider.h"
 #include "mock_environment_helpers.h"
 #include "mock_file_ops.h"
+#include "mock_network.h"
 #include "mock_platform.h"
 #include "mock_settings.h"
+#include "mock_sftp_client.h"
+#include "mock_sftp_utils.h"
 #include "mock_standard_paths.h"
 #include "mock_stdcin.h"
 #include "mock_terminal.h"
 #include "mock_utils.h"
 #include "path.h"
 #include "stub_cert_store.h"
+#include "stub_console.h"
 #include "stub_terminal.h"
 
 #include <src/client/cli/client.h>
 #include <src/client/cli/cmd/remote_settings_handler.h>
 #include <src/daemon/daemon_rpc.h>
 
+#include <multipass/cli/client_platform.h>
 #include <multipass/constants.h>
 #include <multipass/exceptions/settings_exceptions.h>
+#include <multipass/exceptions/ssh_exception.h>
 
 #include <QStringList>
 #include <QTemporaryFile>
+#include <QTimer>
 #include <QtCore/QTemporaryDir>
 #include <QtGlobal>
 
@@ -49,54 +59,82 @@
 #include <utility>
 
 namespace mp = multipass;
+namespace mcp = multipass::cli::platform;
 namespace mpt = multipass::test;
 using namespace testing;
 
 namespace
 {
-
 struct MockDaemonRpc : public mp::DaemonRpc
 {
     using mp::DaemonRpc::DaemonRpc; // ctor
 
-    MOCK_METHOD3(create, grpc::Status(grpc::ServerContext* context, const mp::CreateRequest* request,
-                                      grpc::ServerWriter<mp::CreateReply>* reply)); // here only to ensure not called
-    MOCK_METHOD3(launch, grpc::Status(grpc::ServerContext* context, const mp::LaunchRequest* request,
-                                      grpc::ServerWriter<mp::LaunchReply>* reply));
-    MOCK_METHOD3(purge, grpc::Status(grpc::ServerContext* context, const mp::PurgeRequest* request,
-                                     grpc::ServerWriter<mp::PurgeReply>* response));
-    MOCK_METHOD3(find, grpc::Status(grpc::ServerContext* context, const mp::FindRequest* request,
-                                    grpc::ServerWriter<mp::FindReply>* response));
-    MOCK_METHOD3(info, grpc::Status(grpc::ServerContext* context, const mp::InfoRequest* request,
-                                    grpc::ServerWriter<mp::InfoReply>* response));
-    MOCK_METHOD3(list, grpc::Status(grpc::ServerContext* context, const mp::ListRequest* request,
-                                    grpc::ServerWriter<mp::ListReply>* response));
-    MOCK_METHOD3(mount, grpc::Status(grpc::ServerContext* context, const mp::MountRequest* request,
-                                     grpc::ServerWriter<mp::MountReply>* response));
-    MOCK_METHOD3(recover, grpc::Status(grpc::ServerContext* context, const mp::RecoverRequest* request,
-                                       grpc::ServerWriter<mp::RecoverReply>* response));
-    MOCK_METHOD3(ssh_info, grpc::Status(grpc::ServerContext* context, const mp::SSHInfoRequest* request,
-                                        grpc::ServerWriter<mp::SSHInfoReply>* response));
-    MOCK_METHOD3(start, grpc::Status(grpc::ServerContext* context, const mp::StartRequest* request,
-                                     grpc::ServerWriter<mp::StartReply>* response));
-    MOCK_METHOD3(stop, grpc::Status(grpc::ServerContext* context, const mp::StopRequest* request,
-                                    grpc::ServerWriter<mp::StopReply>* response));
-    MOCK_METHOD3(suspend, grpc::Status(grpc::ServerContext* context, const mp::SuspendRequest* request,
-                                       grpc::ServerWriter<mp::SuspendReply>* response));
-    MOCK_METHOD3(restart, grpc::Status(grpc::ServerContext* context, const mp::RestartRequest* request,
-                                       grpc::ServerWriter<mp::RestartReply>* response));
-    MOCK_METHOD3(delet, grpc::Status(grpc::ServerContext* context, const mp::DeleteRequest* request,
-                                     grpc::ServerWriter<mp::DeleteReply>* response));
-    MOCK_METHOD3(umount, grpc::Status(grpc::ServerContext* context, const mp::UmountRequest* request,
-                                      grpc::ServerWriter<mp::UmountReply>* response));
-    MOCK_METHOD3(version, grpc::Status(grpc::ServerContext* context, const mp::VersionRequest* request,
-                                       grpc::ServerWriter<mp::VersionReply>* response));
-    MOCK_METHOD3(ping,
-                 grpc::Status(grpc::ServerContext* context, const mp::PingRequest* request, mp::PingReply* response));
-    MOCK_METHOD3(get, grpc::Status(grpc::ServerContext* context, const mp::GetRequest* request,
-                                   grpc::ServerWriter<mp::GetReply>* response));
-    MOCK_METHOD3(authenticate, grpc::Status(grpc::ServerContext* context, const mp::AuthenticateRequest* request,
-                                            grpc::ServerWriter<mp::AuthenticateReply>* response));
+    MOCK_METHOD(grpc::Status, create,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::CreateReply, mp::CreateRequest> * server)),
+                (override)); // here only to ensure not called
+    MOCK_METHOD(grpc::Status, launch,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::LaunchReply, mp::LaunchRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, purge,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::PurgeReply, mp::PurgeRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, find,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::FindReply, mp::FindRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, info,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::InfoReply, mp::InfoRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, list,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::ListReply, mp::ListRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, mount,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::MountReply, mp::MountRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, recover,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::RecoverReply, mp::RecoverRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, ssh_info,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, start,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::StartReply, mp::StartRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, stop,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::StopReply, mp::StopRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, suspend,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::SuspendReply, mp::SuspendRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, restart,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::RestartReply, mp::RestartRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, delet,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::DeleteReply, mp::DeleteRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, umount,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::UmountReply, mp::UmountRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, version,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::VersionReply, mp::VersionRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, ping,
+                (grpc::ServerContext * context, const mp::PingRequest* request, mp::PingReply* response), (override));
+    MOCK_METHOD(grpc::Status, get,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::GetReply, mp::GetRequest> * server)),
+                (override));
+    MOCK_METHOD(grpc::Status, authenticate,
+                (grpc::ServerContext * context,
+                 (grpc::ServerReaderWriter<mp::AuthenticateReply, mp::AuthenticateRequest> * server)),
+                (override));
 };
 
 struct Client : public Test
@@ -106,6 +144,9 @@ struct Client : public Test
         EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(petenv_name));
         EXPECT_CALL(mock_settings, get(Eq(mp::winterm_key))).WillRepeatedly(Return("none"));
         EXPECT_CALL(mock_settings, get(Eq(mp::mounts_key))).WillRepeatedly(Return("true"));
+        EXPECT_CALL(mock_settings, register_handler(_)).WillRepeatedly(Return(nullptr));
+        EXPECT_CALL(mock_settings, unregister_handler).Times(AnyNumber());
+
         EXPECT_CALL(mpt::MockStandardPaths::mock_instance(), locate(_, _, _))
             .Times(AnyNumber()); // needed to allow general calls once we have added the specific expectation below
         EXPECT_CALL(mpt::MockStandardPaths::mock_instance(),
@@ -120,11 +161,11 @@ struct Client : public Test
 
     void TearDown() override
     {
-        Mock::VerifyAndClearExpectations(&mock_daemon); /* We got away without this before because, being a strict mock
-                                                           every call to mock_daemon had to be explicitly "expected".
-                                                           Being the best match for incoming calls, each expectation
-                                                           took precedence over the previous ones, preventing them from
-                                                           being saturated inadvertently */
+        testing::Mock::VerifyAndClearExpectations(&mock_daemon); /* We got away without this before because, being a
+                                                           strict mock every call to mock_daemon had to be explicitly
+                                                           "expected". Being the best match for incoming calls, each
+                                                           expectation took precedence over the previous ones,
+                                                           preventing them from being saturated inadvertently */
     }
 
     int setup_client_and_run(const std::vector<std::string>& command, mp::Terminal& term)
@@ -176,18 +217,56 @@ struct Client : public Test
         return get_setting({key});
     }
 
-    auto make_automount_matcher(const QTemporaryDir& fake_home) const
+    static auto make_mount_matcher(const std::string_view fake_source, const std::string_view fake_target,
+                                   const std::string_view instance_name)
     {
-        const auto automount_source_matcher =
-            Property(&mp::MountRequest::source_path, StrEq(fake_home.path().toStdString()));
+        const auto automount_source_matcher = Property(&mp::MountRequest::source_path, StrEq(fake_source));
 
-        const auto target_instance_matcher = Property(&mp::TargetPathInfo::instance_name, StrEq(petenv_name));
-        const auto target_path_matcher = Property(&mp::TargetPathInfo::target_path, StrEq(mp::home_automount_dir));
+        const auto target_instance_matcher = Property(&mp::TargetPathInfo::instance_name, StrEq(instance_name));
+        const auto target_path_matcher = Property(&mp::TargetPathInfo::target_path, StrEq(fake_target));
         const auto target_info_matcher = AllOf(target_instance_matcher, target_path_matcher);
         const auto automount_target_matcher =
             Property(&mp::MountRequest::target_paths, AllOf(Contains(target_info_matcher), SizeIs(1)));
 
         return AllOf(automount_source_matcher, automount_target_matcher);
+    }
+
+    static auto make_mount_id_mappings_matcher(const mp::id_mappings& expected_uid_mappings,
+                                               const mp::id_mappings& expected_gid_mappings)
+    {
+        auto compare_uid_map = [expected_uid_mappings](auto request_uid_mappings) {
+            auto mappings_size = expected_uid_mappings.size();
+            if (mappings_size != (decltype(mappings_size))request_uid_mappings.size())
+                return false;
+
+            for (decltype(mappings_size) i = 0; i < mappings_size; ++i)
+                if (expected_uid_mappings[i].first != request_uid_mappings.at(i).host_id() ||
+                    expected_uid_mappings[i].second != request_uid_mappings.at(i).instance_id())
+                    return false;
+
+            return true;
+        };
+
+        const auto uid_map_matcher = Property(&mp::MountRequest::mount_maps,
+                                              Property(&mp::MountMaps::uid_mappings, ResultOf(compare_uid_map, true)));
+
+        auto compare_gid_map = [expected_gid_mappings](auto request_gid_mappings) {
+            auto mappings_size = expected_gid_mappings.size();
+            if (mappings_size != (decltype(mappings_size))request_gid_mappings.size())
+                return false;
+
+            for (decltype(mappings_size) i = 0; i < mappings_size; ++i)
+                if (expected_gid_mappings[i].first != request_gid_mappings.at(i).host_id() ||
+                    expected_gid_mappings[i].second != request_gid_mappings.at(i).instance_id())
+                    return false;
+
+            return true;
+        };
+
+        const auto gid_map_matcher = Property(&mp::MountRequest::mount_maps,
+                                              Property(&mp::MountMaps::gid_mappings, ResultOf(compare_gid_map, true)));
+
+        return AllOf(uid_map_matcher, gid_map_matcher);
     }
 
     auto make_launch_instance_matcher(const std::string& instance_name)
@@ -240,7 +319,7 @@ struct Client : public Test
 
     auto make_fill_listreply(std::vector<mp::InstanceStatus_Status> statuses)
     {
-        return [statuses](Unused, Unused, grpc::ServerWriter<mp::ListReply>* response) {
+        return [statuses](Unused, grpc::ServerReaderWriter<mp::ListReply, mp::ListRequest>* response) {
             mp::ListReply list_reply;
 
             for (mp::InstanceStatus_Status status : statuses)
@@ -261,6 +340,19 @@ struct Client : public Test
         return QVariant::fromValue(!flag).toString().toStdString();
     }
 
+    template <typename ReplyType, typename RequestType, typename Matcher>
+    auto check_request_and_return(const Matcher& matcher, const grpc::Status& status)
+    {
+        return [&matcher, &status](grpc::ServerReaderWriter<ReplyType, RequestType>* server) {
+            RequestType request;
+            server->Read(&request);
+
+            EXPECT_THAT(request, matcher);
+
+            return status;
+        };
+    }
+
 #ifdef WIN32
     std::string server_address{"localhost:50051"};
 #else
@@ -277,6 +369,9 @@ struct Client : public Test
     mpt::MockSettings& mock_settings = *mock_settings_injection.first;
     inline static std::stringstream trash_stream; // this may have contents (that we don't care about)
     static constexpr char petenv_name[] = "the-petenv";
+    const grpc::Status ok{};
+
+    mpt::MockSSHTestFixture mock_ssh_test_fixture;
 };
 
 struct ClientAlias : public Client, public FakeAliasConfig
@@ -291,7 +386,49 @@ struct ClientAlias : public Client, public FakeAliasConfig
     }
 };
 
+auto make_info_function(const std::string& source_path = "", const std::string& target_path = "")
+{
+    auto info_function = [&source_path, &target_path](
+                             grpc::ServerContext*, grpc::ServerReaderWriter<mp::InfoReply, mp::InfoRequest>* server) {
+        mp::InfoRequest request;
+        server->Read(&request);
+
+        mp::InfoReply info_reply;
+
+        if (request.instance_names().instance_name(0) == "primary")
+        {
+            auto vm_info = info_reply.add_info();
+            vm_info->set_name("primary");
+            vm_info->mutable_instance_status()->set_status(mp::InstanceStatus::RUNNING);
+
+            if (!source_path.empty() && !target_path.empty())
+            {
+                auto mount_info = vm_info->mutable_mount_info();
+
+                auto entry = mount_info->add_mount_paths();
+                entry->set_source_path(source_path);
+                entry->set_target_path(target_path);
+
+                if (source_path.size() > target_path.size())
+                    mount_info->set_longest_path_len(source_path.size());
+                else
+                    mount_info->set_longest_path_len(target_path.size());
+            }
+
+            server->Write(info_reply);
+
+            return grpc::Status{};
+        }
+        else
+            return grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
+    };
+
+    return info_function;
+}
+
 typedef std::vector<std::pair<std::string, mp::AliasDefinition>> AliasesVector;
+
+const std::string csv_header{"Alias,Instance,Command,Working directory\n"};
 
 // Tests for no postional args given
 TEST_F(Client, no_command_is_error)
@@ -369,23 +506,114 @@ TEST_F(Client, handles_remote_handler_exception)
     std::stringstream fake_cerr;
     auto got = send_command({cmd, key}, trash_stream, fake_cerr);
 
-    EXPECT_THAT(fake_cerr.str(), AllOf(HasSubstr(cmd), HasSubstr(msg), HasSubstr(details)));
+    EXPECT_THAT(fake_cerr.str(), AllOf(HasSubstr(cmd), HasSubstr(msg), Not(HasSubstr(details))));
     EXPECT_EQ(got, mp::CommandFail);
 }
 
 // transfer cli tests
-TEST_F(Client, transfer_cmd_good_source_remote)
+TEST_F(Client, transfer_cmd_instance_source_local_target)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
-    EXPECT_THAT(send_command({"transfer", "test-vm:foo", mpt::test_data_path().toStdString() + "good_index.json"}),
-                Eq(mp::ReturnCode::Ok));
+    auto [mocked_sftp_utils, mocked_sftp_utils_guard] = mpt::MockSFTPUtils::inject();
+    auto mocked_sftp_client = std::make_unique<mpt::MockSFTPClient>();
+    auto mocked_sftp_client_p = mocked_sftp_client.get();
+
+    EXPECT_CALL(*mocked_sftp_utils, make_SFTPClient).WillOnce(Return(std::move(mocked_sftp_client)));
+    EXPECT_CALL(*mocked_sftp_client_p, pull).WillOnce(Return(true));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            mp::SSHInfoReply reply;
+            reply.mutable_ssh_info()->insert({"test-vm", mp::SSHInfo{}});
+            server->Write(reply);
+            return grpc::Status{};
+        });
+    EXPECT_EQ(send_command({"transfer", "test-vm:foo", "bar"}), mp::ReturnCode::Ok);
 }
 
-TEST_F(Client, transfer_cmd_good_destination_remote)
+TEST_F(Client, transfer_cmd_instance_sources_local_target_not_dir)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
-    EXPECT_THAT(send_command({"transfer", mpt::test_data_path().toStdString() + "good_index.json", "test-vm:bar"}),
-                Eq(mp::ReturnCode::Ok));
+    auto [mocked_file_ops, mocked_file_ops_guard] = mpt::MockFileOps::inject();
+    auto [mocked_sftp_utils, mocked_sftp_utils_guard] = mpt::MockSFTPUtils::inject();
+
+    EXPECT_CALL(*mocked_sftp_utils, make_SFTPClient).WillOnce(Return(std::make_unique<mpt::MockSFTPClient>()));
+    EXPECT_CALL(*mocked_file_ops, is_directory).WillOnce(Return(false));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            mp::SSHInfoReply reply;
+            reply.mutable_ssh_info()->insert({"test-vm", mp::SSHInfo{}});
+            server->Write(reply);
+            return grpc::Status{};
+        });
+
+    std::stringstream err;
+    EXPECT_EQ(send_command({"transfer", "test-vm:foo", "test-vm:baz", "bar"}, trash_stream, err),
+              mp::ReturnCode::CommandFail);
+    EXPECT_THAT(err.str(), HasSubstr("Target \"bar\" is not a directory"));
+}
+
+TEST_F(Client, transfer_cmd_instance_sources_local_target_cannot_access)
+{
+    auto [mocked_file_ops, mocked_file_ops_guard] = mpt::MockFileOps::inject();
+    auto [mocked_sftp_utils, mocked_sftp_utils_guard] = mpt::MockSFTPUtils::inject();
+
+    EXPECT_CALL(*mocked_sftp_utils, make_SFTPClient).WillOnce(Return(std::make_unique<mpt::MockSFTPClient>()));
+    auto err = std::make_error_code(std::errc::permission_denied);
+    EXPECT_CALL(*mocked_file_ops, is_directory).WillOnce([&](auto, std::error_code& e) {
+        e = err;
+        return false;
+    });
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            mp::SSHInfoReply reply;
+            reply.mutable_ssh_info()->insert({"test-vm", mp::SSHInfo{}});
+            server->Write(reply);
+            return grpc::Status{};
+        });
+
+    std::stringstream err_sink;
+    EXPECT_EQ(send_command({"transfer", "test-vm:foo", "test-vm:baz", "bar"}, trash_stream, err_sink),
+              mp::ReturnCode::CommandFail);
+    EXPECT_THAT(err_sink.str(), HasSubstr(fmt::format("Cannot access \"bar\": {}", err.message())));
+}
+
+TEST_F(Client, transfer_cmd_local_sources_instance_target_not_dir)
+{
+    auto [mocked_sftp_utils, mocked_sftp_utils_guard] = mpt::MockSFTPUtils::inject();
+    auto mocked_sftp_client = std::make_unique<mpt::MockSFTPClient>();
+    auto mocked_sftp_client_p = mocked_sftp_client.get();
+
+    EXPECT_CALL(*mocked_sftp_utils, make_SFTPClient).WillOnce(Return(std::move(mocked_sftp_client)));
+    EXPECT_CALL(*mocked_sftp_client_p, is_remote_dir).WillOnce(Return(false));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            mp::SSHInfoReply reply;
+            reply.mutable_ssh_info()->insert({"test-vm", mp::SSHInfo{}});
+            server->Write(reply);
+            return grpc::Status{};
+        });
+
+    std::stringstream err;
+    EXPECT_EQ(send_command({"transfer", "foo", "baz", "test-vm:bar"}, trash_stream, err), mp::ReturnCode::CommandFail);
+    EXPECT_THAT(err.str(), HasSubstr("Target \"bar\" is not a directory"));
+}
+
+TEST_F(Client, transfer_cmd_local_source_instance_target)
+{
+    auto [mocked_sftp_utils, mocked_sftp_utils_guard] = mpt::MockSFTPUtils::inject();
+    auto mocked_sftp_client = std::make_unique<mpt::MockSFTPClient>();
+    auto mocked_sftp_client_p = mocked_sftp_client.get();
+
+    EXPECT_CALL(*mocked_sftp_utils, make_SFTPClient).WillOnce(Return(std::move(mocked_sftp_client)));
+    EXPECT_CALL(*mocked_sftp_client_p, push).WillRepeatedly(Return(true));
+    EXPECT_CALL(*mocked_sftp_client_p, is_remote_dir).WillOnce(Return(true));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            mp::SSHInfoReply reply;
+            reply.mutable_ssh_info()->insert({"test-vm", mp::SSHInfo{}});
+            server->Write(reply);
+            return grpc::Status{};
+        });
+
+    EXPECT_EQ(send_command({"transfer", "foo", "C:\\Users\\file", "test-vm:bar"}), mp::ReturnCode::Ok);
 }
 
 TEST_F(Client, transfer_cmd_help_ok)
@@ -393,21 +621,9 @@ TEST_F(Client, transfer_cmd_help_ok)
     EXPECT_THAT(send_command({"transfer", "-h"}), Eq(mp::ReturnCode::Ok));
 }
 
-TEST_F(Client, transfer_cmd_fails_invalid_source_file)
-{
-    EXPECT_THAT(send_command({"transfer", "foo", "test-vm:bar"}), Eq(mp::ReturnCode::CommandLineError));
-}
-
-TEST_F(Client, transfer_cmd_fails_source_is_dir)
-{
-    EXPECT_THAT(send_command({"transfer", mpt::test_data_path().toStdString(), "test-vm:bar"}),
-                Eq(mp::ReturnCode::CommandLineError));
-}
-
 TEST_F(Client, transfer_cmd_fails_no_instance)
 {
-    EXPECT_THAT(send_command({"transfer", mpt::test_data_path().toStdString() + "good_index.json", "."}),
-                Eq(mp::ReturnCode::CommandLineError));
+    EXPECT_THAT(send_command({"transfer", "foo", "bar"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
 TEST_F(Client, transfer_cmd_fails_instance_both_source_destination)
@@ -420,28 +636,57 @@ TEST_F(Client, transfer_cmd_fails_too_few_args)
     EXPECT_THAT(send_command({"transfer", "foo"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
-TEST_F(Client, transfer_cmd_fails_source_path_empty)
+TEST_F(Client, transfer_cmd_local_target_not_all_instance_sources_fails)
 {
-    EXPECT_THAT(send_command({"transfer", "test-vm1:", "bar"}), Eq(mp::ReturnCode::CommandLineError));
-}
-
-TEST_F(Client, transfer_cmd_fails_multiple_sources_destination_file)
-{
-    EXPECT_THAT(send_command({"transfer", "test-vm1:foo", "test-vm2:bar",
-                              mpt::test_data_path().toStdString() + "good_index.json"}),
-                Eq(mp::ReturnCode::CommandLineError));
+    EXPECT_THAT(send_command({"transfer", "aaa", "test-vm1:foo", "bbb"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
 TEST_F(Client, transfer_cmd_stdin_good_destination_ok)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
-    EXPECT_THAT(send_command({"transfer", "-", "test-vm1:foo"}), Eq(mp::ReturnCode::Ok));
+    auto [mocked_sftp_utils, mocked_sftp_utils_guard] = mpt::MockSFTPUtils::inject();
+    auto mocked_sftp_client = std::make_unique<mpt::MockSFTPClient>();
+    auto mocked_sftp_client_p = mocked_sftp_client.get();
+
+    EXPECT_CALL(*mocked_sftp_utils, make_SFTPClient).WillOnce(Return(std::move(mocked_sftp_client)));
+    EXPECT_CALL(*mocked_sftp_client_p, from_cin);
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            mp::SSHInfoReply reply;
+            reply.mutable_ssh_info()->insert({"test-vm", mp::SSHInfo{}});
+            server->Write(reply);
+            return grpc::Status{};
+        });
+
+    EXPECT_EQ(send_command({"transfer", "-", "test-vm1:foo"}), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, transfer_cmd_stdin_bad_destination_fails)
+{
+    EXPECT_THAT(send_command({"transfer", "-", "foo"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
 TEST_F(Client, transfer_cmd_stdout_good_source_ok)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
-    EXPECT_THAT(send_command({"transfer", "test-vm1:foo", "-"}), Eq(mp::ReturnCode::Ok));
+    auto [mocked_sftp_utils, mocked_sftp_utils_guard] = mpt::MockSFTPUtils::inject();
+    auto mocked_sftp_client = std::make_unique<mpt::MockSFTPClient>();
+    auto mocked_sftp_client_p = mocked_sftp_client.get();
+
+    EXPECT_CALL(*mocked_sftp_utils, make_SFTPClient).WillOnce(Return(std::move(mocked_sftp_client)));
+    EXPECT_CALL(*mocked_sftp_client_p, to_cout);
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            mp::SSHInfoReply reply;
+            reply.mutable_ssh_info()->insert({"test-vm", mp::SSHInfo{}});
+            server->Write(reply);
+            return grpc::Status{};
+        });
+
+    EXPECT_EQ(send_command({"transfer", "test-vm1:foo", "-"}), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, transfer_cmd_stdout_bad_source_fails)
+{
+    EXPECT_THAT(send_command({"transfer", "foo", "-"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
 TEST_F(Client, transfer_cmd_stdout_stdin_only_fails)
@@ -451,15 +696,18 @@ TEST_F(Client, transfer_cmd_stdout_stdin_only_fails)
 
 TEST_F(Client, transfer_cmd_stdout_stdin_declaration_fails)
 {
-    EXPECT_THAT(
-        send_command({"transfer", "test-vm1:foo", "-", "-", mpt::test_data_path().toStdString() + "good_index.json"}),
-        Eq(mp::ReturnCode::CommandLineError));
+    EXPECT_THAT(send_command({"transfer", "test-vm1:foo", "-", "-"}), Eq(mp::ReturnCode::CommandLineError));
+}
+
+TEST_F(Client, transfer_cmd_stream_too_many_args)
+{
+    EXPECT_THAT(send_command({"transfer", "test-vm1:foo", "aaaaa", "-"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
 // shell cli test
 TEST_F(Client, shell_cmd_good_arguments)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _));
     EXPECT_THAT(send_command({"shell", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -471,7 +719,8 @@ TEST_F(Client, shell_cmd_help_ok)
 TEST_F(Client, shell_cmd_no_args_targets_petenv)
 {
     const auto petenv_matcher = make_ssh_info_instance_matcher(petenv_name);
-    EXPECT_CALL(mock_daemon, ssh_info(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"shell"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -481,14 +730,16 @@ TEST_F(Client, shell_cmd_considers_configured_petenv)
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(custom_petenv));
 
     const auto petenv_matcher = make_ssh_info_instance_matcher(custom_petenv);
-    EXPECT_CALL(mock_daemon, ssh_info(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"shell"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, shell_cmd_can_target_petenv_explicitly)
 {
     const auto petenv_matcher = make_ssh_info_instance_matcher(petenv_name);
-    EXPECT_CALL(mock_daemon, ssh_info(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"shell", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -496,71 +747,83 @@ TEST_F(Client, shell_cmd_launches_petenv_if_absent)
 {
     const auto petenv_ssh_info_matcher = make_ssh_info_instance_matcher(petenv_name);
     const auto petenv_launch_matcher = Property(&mp::LaunchRequest::instance_name, StrEq(petenv_name));
-    const grpc::Status ok{}, notfound{grpc::StatusCode::NOT_FOUND, "msg"};
+    const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
 
     EXPECT_CALL(mock_daemon, mount).WillRepeatedly(Return(ok)); // 0 or more times
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, petenv_ssh_info_matcher, _)).WillOnce(Return(notfound));
-    EXPECT_CALL(mock_daemon, launch(_, petenv_launch_matcher, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, ssh_info(_, petenv_ssh_info_matcher, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(
+            check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(petenv_ssh_info_matcher, notfound)));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(petenv_launch_matcher, ok)));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(petenv_ssh_info_matcher, ok)));
 
     EXPECT_THAT(send_command({"shell", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, shell_cmd_automounts_when_launching_petenv)
 {
-    const grpc::Status ok{}, notfound{grpc::StatusCode::NOT_FOUND, "msg"};
+    const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).WillOnce(Return(notfound));
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).WillOnce(Return(notfound));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, mount(_, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).WillOnce(Return(ok));
     EXPECT_THAT(send_command({"shell", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, shellCmdSkipsAutomountWhenDisabled)
 {
     std::stringstream cout_stream;
-    const grpc::Status ok{}, notfound{grpc::StatusCode::NOT_FOUND, "msg"};
+    const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).WillOnce(Return(notfound));
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).WillOnce(Return(notfound));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(ok));
     EXPECT_CALL(mock_settings, get(Eq(mp::mounts_key))).WillOnce(Return("false"));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).Times(0);
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, mount(_, _)).Times(0);
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).WillOnce(Return(ok));
     EXPECT_THAT(send_command({"shell", petenv_name}, cout_stream), Eq(mp::ReturnCode::Ok));
-    EXPECT_THAT(cout_stream.str(), HasSubstr("Skipping 'Home' mount due to disabled mounts feature\n"));
+    EXPECT_THAT(cout_stream.str(), HasSubstr("Skipping mount due to disabled mounts feature\n"));
 }
 
 TEST_F(Client, shell_cmd_forwards_verbosity_to_subcommands)
 {
-    const grpc::Status ok{}, notfound{grpc::StatusCode::NOT_FOUND, "msg"};
+    const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
     const auto verbosity = 3;
+    const auto ssh_info_verbosity_matcher = make_request_verbosity_matcher<mp::SSHInfoRequest>(verbosity);
+    const auto launch_verbosity_matcher = make_request_verbosity_matcher<mp::LaunchRequest>(verbosity);
+    const auto mount_verbosity_matcher = make_request_verbosity_matcher<mp::MountRequest>(verbosity);
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, make_request_verbosity_matcher<mp::SSHInfoRequest>(verbosity), _))
-        .WillOnce(Return(notfound));
-    EXPECT_CALL(mock_daemon, launch(_, make_request_verbosity_matcher<mp::LaunchRequest>(verbosity), _))
-        .WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, make_request_verbosity_matcher<mp::MountRequest>(verbosity), _))
-        .WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, ssh_info(_, make_request_verbosity_matcher<mp::SSHInfoRequest>(verbosity), _))
-        .WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(
+            check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_verbosity_matcher, notfound)));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(launch_verbosity_matcher, ok)));
+    EXPECT_CALL(mock_daemon, mount)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::MountReply, mp::MountRequest>(mount_verbosity_matcher, ok)));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_verbosity_matcher, ok)));
     EXPECT_THAT(send_command({"shell", "-vvv"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, shell_cmd_forwards_timeout_to_subcommands)
 {
-    const grpc::Status ok{}, notfound{grpc::StatusCode::NOT_FOUND, "msg"};
+    const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
     const auto timeout = 123;
+    const auto launch_timeout_matcher = make_request_timeout_matcher<mp::LaunchRequest>(timeout);
 
     InSequence seq;
     EXPECT_CALL(mock_daemon, ssh_info).WillOnce(Return(notfound));
-    EXPECT_CALL(mock_daemon, launch(_, make_request_timeout_matcher<mp::LaunchRequest>(timeout), _))
-        .WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(launch_timeout_matcher, ok)));
     EXPECT_CALL(mock_daemon, mount).WillOnce(Return(ok));
     EXPECT_CALL(mock_daemon, ssh_info).WillOnce(Return(ok));
     EXPECT_THAT(send_command({"shell", "--timeout", std::to_string(timeout)}), Eq(mp::ReturnCode::Ok));
@@ -568,7 +831,7 @@ TEST_F(Client, shell_cmd_forwards_timeout_to_subcommands)
 
 TEST_F(Client, shellCmdFailsWhenUnableToRetrieveAutomountSetting)
 {
-    const grpc::Status ok{}, notfound{grpc::StatusCode::NOT_FOUND, "msg"}, error{grpc::StatusCode::INTERNAL, "oops"};
+    const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"}, error{grpc::StatusCode::INTERNAL, "oops"};
     const auto except = mp::RemoteHandlerException{error};
 
     InSequence seq;
@@ -581,14 +844,13 @@ TEST_F(Client, shellCmdFailsWhenUnableToRetrieveAutomountSetting)
 
 TEST_F(Client, shell_cmd_fails_when_automounting_in_petenv_fails)
 {
-    const auto ok = grpc::Status{};
     const auto notfound = grpc::Status{grpc::StatusCode::NOT_FOUND, "msg"};
     const auto mount_failure = grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).WillOnce(Return(notfound));
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).WillOnce(Return(mount_failure));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).WillOnce(Return(notfound));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, mount(_, _)).WillOnce(Return(mount_failure));
     EXPECT_THAT(send_command({"shell", petenv_name}), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -597,12 +859,16 @@ TEST_F(Client, shell_cmd_starts_instance_if_stopped_or_suspended)
     const auto instance = "ordinary";
     const auto ssh_info_matcher = make_ssh_info_instance_matcher(instance);
     const auto start_matcher = make_instance_in_repeated_field_matcher<mp::StartRequest, 1>(instance);
-    const grpc::Status ok{}, aborted{grpc::StatusCode::ABORTED, "msg"};
+    const grpc::Status aborted{grpc::StatusCode::ABORTED, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, ssh_info_matcher, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, start(_, start_matcher, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, ssh_info(_, ssh_info_matcher, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_matcher, aborted)));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(start_matcher, ok)));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_matcher, ok)));
 
     EXPECT_THAT(send_command({"shell", instance}), Eq(mp::ReturnCode::Ok));
 }
@@ -611,12 +877,16 @@ TEST_F(Client, shell_cmd_starts_petenv_if_stopped_or_suspended)
 {
     const auto ssh_info_matcher = make_ssh_info_instance_matcher(petenv_name);
     const auto start_matcher = make_instance_in_repeated_field_matcher<mp::StartRequest, 1>(petenv_name);
-    const grpc::Status ok{}, aborted{grpc::StatusCode::ABORTED, "msg"};
+    const grpc::Status aborted{grpc::StatusCode::ABORTED, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, ssh_info_matcher, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, start(_, start_matcher, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, ssh_info(_, ssh_info_matcher, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_matcher, aborted)));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(start_matcher, ok)));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_matcher, ok)));
 
     EXPECT_THAT(send_command({"shell", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
@@ -626,7 +896,9 @@ TEST_F(Client, shell_cmd_fails_if_petenv_present_but_deleted)
     const auto petenv_matcher = make_ssh_info_instance_matcher(petenv_name);
     const grpc::Status failed_precond{grpc::StatusCode::FAILED_PRECONDITION, "msg"};
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, petenv_matcher, _)).WillOnce(Return(failed_precond));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(petenv_matcher, failed_precond)));
     EXPECT_THAT(send_command({"shell", petenv_name}), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -636,7 +908,9 @@ TEST_F(Client, shell_cmd_fails_on_other_absent_instance)
     const auto instance_matcher = make_ssh_info_instance_matcher(instance);
     const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, instance_matcher, _)).WillOnce(Return(notfound));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(instance_matcher, notfound)));
     EXPECT_THAT(send_command({"shell", instance}), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -654,10 +928,10 @@ TEST_F(Client, shell_cmd_disabled_petenv)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).Times(0);
     EXPECT_THAT(send_command({"shell"}), Eq(mp::ReturnCode::CommandLineError));
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).Times(2);
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).Times(2);
     EXPECT_THAT(send_command({"shell", "foo"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"shell", "primary"}), Eq(mp::ReturnCode::Ok));
 }
@@ -666,31 +940,31 @@ TEST_F(Client, shell_cmd_disabled_petenv_help)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).Times(0);
     EXPECT_THAT(send_command({"shell", "-h"}), Eq(mp::ReturnCode::Ok));
 }
 
 // launch cli tests
 TEST_F(Client, launch_cmd_good_arguments)
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, launch_cmd_wrong_mem_arguments)
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, launch(_, _)).Times(0);
     MP_EXPECT_THROW_THAT(send_command({"launch", "-m", "wrong"}), std::runtime_error,
                          mpt::match_what(HasSubstr("wrong is not a valid memory size")));
-    MP_EXPECT_THROW_THAT(send_command({"launch", "--mem", "1.23f"}), std::runtime_error,
+    MP_EXPECT_THROW_THAT(send_command({"launch", "--memory", "1.23f"}), std::runtime_error,
                          mpt::match_what(HasSubstr("1.23f is not a valid memory size")));
-    MP_EXPECT_THROW_THAT(send_command({"launch", "-mem", "2048M"}), std::runtime_error,
-                         mpt::match_what(HasSubstr("em is not a valid memory size"))); // note single dash
+    MP_EXPECT_THROW_THAT(send_command({"launch", "-memory", "2048M"}), std::runtime_error,
+                         mpt::match_what(HasSubstr("emory is not a valid memory size"))); // note single dash
 }
 
 TEST_F(Client, launch_cmd_wrong_disk_arguments)
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, launch(_, _)).Times(0);
     MP_EXPECT_THROW_THAT(send_command({"launch", "-d", "wrong"}), std::runtime_error,
                          mpt::match_what(HasSubstr("wrong is not a valid memory size")));
     MP_EXPECT_THROW_THAT(send_command({"launch", "--disk", "4.56f"}), std::runtime_error,
@@ -716,7 +990,7 @@ TEST_F(Client, launch_cmd_fails_unknown_option)
 
 TEST_F(Client, launch_cmd_name_option_ok)
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "-n", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -727,7 +1001,7 @@ TEST_F(Client, launch_cmd_name_option_fails_no_value)
 
 TEST_F(Client, launch_cmd_memory_option_ok)
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "-m", "1G"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -736,9 +1010,23 @@ TEST_F(Client, launch_cmd_memory_option_fails_no_value)
     EXPECT_THAT(send_command({"launch", "-m"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
+TEST_F(Client, launch_cmd_memory_fails_duplicate_options)
+{
+    EXPECT_THAT(send_command({"launch", "--memory", "2048M", "--mem", "2048M"}), Eq(mp::ReturnCode::CommandLineError));
+}
+
+TEST_F(Client, launch_cmd_memory_deprecated_option_warning)
+{
+    std::stringstream cout_stream;
+
+    EXPECT_CALL(mock_daemon, launch(_, _));
+    EXPECT_THAT(send_command({"launch", "--mem", "2048M"}, cout_stream, trash_stream), Eq(mp::ReturnCode::Ok));
+    EXPECT_NE(std::string::npos, cout_stream.str().find("warning: \"--mem\"")) << "cout has: " << cout_stream.str();
+}
+
 TEST_F(Client, launch_cmd_cpu_option_ok)
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "-c", "2"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -774,13 +1062,13 @@ TEST_F(Client, launch_cmd_cpu_option_fails_no_value)
 
 TEST_F(Client, DISABLE_ON_MACOS(launch_cmd_custom_image_file_ok))
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "file://foo"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, DISABLE_ON_MACOS(launch_cmd_custom_image_http_ok))
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "http://foo"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -790,7 +1078,7 @@ TEST_F(Client, launch_cmd_cloudinit_option_with_valid_file_is_ok)
     tmpfile.open();
     tmpfile.write("password: passw0rd"); // need some YAML
     tmpfile.close();
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "--cloud-init", qPrintable(tmpfile.fileName())}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -815,7 +1103,7 @@ TEST_F(Client, launch_cmd_cloudinit_option_reads_stdin_ok)
     MockStdCin cin("password: passw0rd"); // no effect since terminal encapsulation of streams
 
     std::stringstream ss;
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
     EXPECT_THAT(send_command({"launch", "--cloud-init", "-"}, trash_stream, trash_stream, ss), Eq(mp::ReturnCode::Ok));
 }
 
@@ -824,20 +1112,21 @@ TEST_F(Client, launch_cmd_automounts_home_in_petenv)
 {
     const auto fake_home = QTemporaryDir{}; // the client checks the mount source exists
     const auto env_scope = mpt::SetEnvScope{"HOME", fake_home.path().toUtf8()};
-    const auto home_automount_matcher = make_automount_matcher(fake_home);
+    const auto home_automount_matcher =
+        make_mount_matcher(fake_home.path().toStdString(), mp::home_automount_dir, petenv_name);
     const auto petenv_launch_matcher = make_launch_instance_matcher(petenv_name);
-    const auto ok = grpc::Status{};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, launch(_, petenv_launch_matcher, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, home_automount_matcher, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(petenv_launch_matcher, ok)));
+    EXPECT_CALL(mock_daemon, mount)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::MountReply, mp::MountRequest>(home_automount_matcher, ok)));
     EXPECT_THAT(send_command({"launch", "--name", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 #endif
 
 TEST_F(Client, launchCmdSkipsAutomountWhenDisabled)
 {
-    const grpc::Status ok{};
     std::stringstream cout_stream;
     EXPECT_CALL(mock_settings, get(Eq(mp::mounts_key))).WillOnce(Return("false"));
 
@@ -845,7 +1134,7 @@ TEST_F(Client, launchCmdSkipsAutomountWhenDisabled)
     EXPECT_CALL(mock_daemon, mount).Times(0);
 
     EXPECT_THAT(send_command({"launch", "--name", petenv_name}, cout_stream), Eq(mp::ReturnCode::Ok));
-    EXPECT_THAT(cout_stream.str(), HasSubstr("Skipping 'Home' mount due to disabled mounts feature\n"));
+    EXPECT_THAT(cout_stream.str(), HasSubstr("Skipping mount due to disabled mounts feature\n"));
 }
 
 TEST_F(Client, launchCmdOnlyWarnsMountForPetEnv)
@@ -853,15 +1142,14 @@ TEST_F(Client, launchCmdOnlyWarnsMountForPetEnv)
     const auto invalid_argument = grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
     std::stringstream cout_stream;
     EXPECT_CALL(mock_settings, get(Eq(mp::mounts_key))).WillRepeatedly(Return("false"));
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(invalid_argument));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(invalid_argument));
 
     EXPECT_THAT(send_command({"launch", "--name", ".asdf"}, cout_stream), Eq(mp::ReturnCode::CommandFail));
-    EXPECT_THAT(cout_stream.str(), Not(HasSubstr("Skipping 'Home' mount due to disabled mounts feature\n")));
+    EXPECT_THAT(cout_stream.str(), Not(HasSubstr("Skipping mount due to disabled mounts feature\n")));
 }
 
 TEST_F(Client, launchCmdFailsWhenUnableToRetrieveAutomountSetting)
 {
-    const auto ok = grpc::Status{};
     const auto except = mp::RemoteHandlerException{grpc::Status{grpc::StatusCode::INTERNAL, "oops"}};
 
     InSequence seq;
@@ -873,31 +1161,33 @@ TEST_F(Client, launchCmdFailsWhenUnableToRetrieveAutomountSetting)
 
 TEST_F(Client, launch_cmd_fails_when_automounting_in_petenv_fails)
 {
-    const grpc::Status ok{}, mount_failure{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
+    const grpc::Status mount_failure{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).WillOnce(Return(mount_failure));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, mount(_, _)).WillOnce(Return(mount_failure));
     EXPECT_THAT(send_command({"launch", "--name", petenv_name}), Eq(mp::ReturnCode::CommandFail));
 }
 
 TEST_F(Client, launch_cmd_forwards_verbosity_to_subcommands)
 {
-    const auto ok = grpc::Status{};
     const auto verbosity = 4;
+    const auto launch_verbosity_matcher = make_request_verbosity_matcher<mp::LaunchRequest>(verbosity);
+    const auto mount_verbosity_matcher = make_request_verbosity_matcher<mp::MountRequest>(verbosity);
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, launch(_, make_request_verbosity_matcher<mp::LaunchRequest>(verbosity), _))
-        .WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, make_request_verbosity_matcher<mp::MountRequest>(verbosity), _))
-        .WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(launch_verbosity_matcher, ok)));
+    EXPECT_CALL(mock_daemon, mount)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::MountReply, mp::MountRequest>(mount_verbosity_matcher, ok)));
     EXPECT_THAT(send_command({"launch", "--name", petenv_name, "-vvvv"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, launch_cmd_does_not_automount_in_normal_instances)
 {
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).Times(0); // because we may want to move from a Strict mock in the future
+    EXPECT_CALL(mock_daemon, launch(_, _));
+    EXPECT_CALL(mock_daemon, mount(_, _)).Times(0); // because we may want to move from a Strict mock in the future
     EXPECT_THAT(send_command({"launch"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -907,10 +1197,152 @@ TEST_F(Client, launch_cmd_disabled_petenv_passes)
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(custom_petenv));
 
     const auto petenv_matcher = make_launch_instance_matcher("foo");
-    EXPECT_CALL(mock_daemon, launch(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(petenv_matcher, ok)));
 
     EXPECT_THAT(send_command({"launch", "--name", "foo"}), Eq(mp::ReturnCode::Ok));
 }
+
+TEST_F(Client, launch_cmd_mount_option)
+{
+    const QTemporaryDir fake_directory{};
+
+    const auto fake_source = fake_directory.path().toStdString();
+    const auto fake_target = fake_source;
+    const auto instance_name = "some_instance";
+
+    const auto mount_matcher = make_mount_matcher(fake_source, fake_target, instance_name);
+    const auto launch_matcher = make_launch_instance_matcher(instance_name);
+
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(launch_matcher, ok)));
+    EXPECT_CALL(mock_daemon, mount)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::MountReply, mp::MountRequest>(mount_matcher, ok)));
+    EXPECT_EQ(send_command({"launch", "--name", instance_name, "--mount", fake_source}), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, launchCmdMountOptionFailsOnInvalidDir)
+{
+    auto [mocked_file_ops, mocked_file_ops_guard] = mpt::MockFileOps::inject();
+    EXPECT_CALL(*mocked_file_ops, exists(A<const QFileInfo&>())).WillOnce(Return(false)).WillRepeatedly(Return(true));
+    EXPECT_CALL(*mocked_file_ops, isDir(A<const QFileInfo&>())).WillOnce(Return(false)).WillRepeatedly(Return(true));
+    EXPECT_CALL(*mocked_file_ops, isReadable(A<const QFileInfo&>()))
+        .WillOnce(Return(false))
+        .WillRepeatedly(Return(true));
+
+    const auto fake_source = "invalid/dir";
+    const auto fake_target = fake_source;
+    const auto instance_name = "some_instance";
+
+    std::stringstream err;
+    EXPECT_EQ(
+        send_command({"launch", "--name", instance_name, "--mount", fmt::format("{}:{}", fake_source, fake_target)},
+                     trash_stream, err),
+        mp::ReturnCode::CommandLineError);
+    EXPECT_THAT(err.str(), HasSubstr(fmt::format("Mount source path \"{}\" does not exist", fake_source)));
+    err.clear();
+
+    EXPECT_EQ(
+        send_command({"launch", "--name", instance_name, "--mount", fmt::format("{}:{}", fake_source, fake_target)},
+                     trash_stream, err),
+        mp::ReturnCode::CommandLineError);
+    EXPECT_THAT(err.str(), HasSubstr(fmt::format("Mount source path \"{}\" is not a directory", fake_source)));
+    err.clear();
+
+    EXPECT_EQ(
+        send_command({"launch", "--name", instance_name, "--mount", fmt::format("{}:{}", fake_source, fake_target)},
+                     trash_stream, err),
+        mp::ReturnCode::CommandLineError);
+    EXPECT_THAT(err.str(), HasSubstr(fmt::format("Mount source path \"{}\" is not readable", fake_source)));
+}
+
+TEST_F(Client, launch_cmd_petenv_mount_option_override_home)
+{
+    const QTemporaryDir fake_directory{};
+
+    const auto fake_source = fake_directory.path().toStdString();
+    const auto fake_target = mp::home_automount_dir;
+
+    const auto mount_matcher = make_mount_matcher(fake_source, fake_target, petenv_name);
+    const auto launch_matcher = make_launch_instance_matcher(petenv_name);
+
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(launch_matcher, ok)));
+    EXPECT_CALL(mock_daemon, mount)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::MountReply, mp::MountRequest>(mount_matcher, ok)));
+    EXPECT_EQ(
+        send_command({"launch", "--name", petenv_name, "--mount", fmt::format("{}:{}", fake_source, fake_target)}),
+        mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, launch_cmd_cloudinit_url)
+{
+    const auto fake_url = QStringLiteral("https://example.com");
+    const auto fake_downloaded_yaml = QByteArrayLiteral("password: passw0rd");
+
+    auto [mock_network_manager_factory, guard] = mpt::MockNetworkManagerFactory::inject();
+    auto mock_network_access_manager = std::make_unique<NiceMock<mpt::MockQNetworkAccessManager>>();
+    auto mock_reply = new mpt::MockQNetworkReply();
+
+    EXPECT_CALL(*mock_network_manager_factory, make_network_manager).WillOnce([&mock_network_access_manager](auto...) {
+        return std::move(mock_network_access_manager);
+    });
+
+    EXPECT_CALL(*mock_network_access_manager, createRequest).WillOnce(Return(mock_reply));
+    EXPECT_CALL(*mock_reply, readData)
+        .WillOnce([&fake_downloaded_yaml](char* data, auto) {
+            auto data_size = fake_downloaded_yaml.size();
+            memcpy(data, fake_downloaded_yaml.constData(), data_size);
+            return data_size;
+        })
+        .WillOnce(Return(0));
+
+    QTimer::singleShot(0, [&mock_reply] { mock_reply->finished(); });
+    EXPECT_CALL(mock_daemon, launch).WillOnce(Return(ok));
+    EXPECT_EQ(send_command({"launch", "--cloud-init", fake_url.toStdString()}), mp::ReturnCode::Ok);
+}
+
+typedef typename std::tuple<mp::id_mappings, mp::id_mappings, mp::id_mappings, mp::id_mappings> id_test_tuples;
+struct MountIdMappingsTest : public Client, public WithParamInterface<id_test_tuples>
+{
+};
+
+TEST_P(MountIdMappingsTest, mount_cmd_id_mappings)
+{
+    const QTemporaryDir fake_directory{};
+    const auto fake_source = fake_directory.path().toStdString();
+    const auto fake_target = "instance_name:mounted_folder";
+
+    auto [cmdline_uid_mappings, cmdline_gid_mappings, expected_uid_mappings, expected_gid_mappings] = GetParam();
+
+    const auto id_mappings_matcher = make_mount_id_mappings_matcher(expected_uid_mappings, expected_gid_mappings);
+
+    EXPECT_CALL(mock_daemon, mount)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::MountReply, mp::MountRequest>(id_mappings_matcher, ok)));
+
+    std::vector<std::string> cmdline{"mount", fake_source, fake_target};
+
+    for (const auto& uid_element : cmdline_uid_mappings)
+    {
+        cmdline.push_back("--uid-map");
+        cmdline.push_back(std::to_string(uid_element.first) + ":" + std::to_string(uid_element.second));
+    }
+
+    for (const auto& gid_element : cmdline_gid_mappings)
+    {
+        cmdline.push_back("--gid-map");
+        cmdline.push_back(std::to_string(gid_element.first) + ":" + std::to_string(gid_element.second));
+    }
+
+    EXPECT_EQ(send_command(cmdline), mp::ReturnCode::Ok);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Client, MountIdMappingsTest,
+    Values(id_test_tuples{{{500, 600}, {300, 400}}, {{700, 800}}, {{500, 600}, {300, 400}}, {{700, 800}}},
+           id_test_tuples{{}, {{200, 300}}, {{mcp::getuid(), mp::default_id}}, {{200, 300}}},
+           id_test_tuples{{{100, 200}}, {}, {{100, 200}}, {{mcp::getgid(), mp::default_id}}},
+           id_test_tuples{{}, {}, {{mcp::getuid(), mp::default_id}}, {{mcp::getgid(), mp::default_id}}}));
 
 struct TestInvalidNetworkOptions : Client, WithParamInterface<std::vector<std::string>>
 {
@@ -921,7 +1353,7 @@ TEST_P(TestInvalidNetworkOptions, launch_cmd_return)
     auto commands = GetParam();
     commands.insert(commands.begin(), std::string{"launch"});
 
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, launch(_, _)).Times(0);
 
     EXPECT_THAT(send_command(commands), Eq(mp::ReturnCode::CommandLineError));
 }
@@ -944,7 +1376,7 @@ TEST_P(TestValidNetworkOptions, launch_cmd_return)
     auto commands = GetParam();
     commands.insert(commands.begin(), std::string{"launch"});
 
-    EXPECT_CALL(mock_daemon, launch(_, _, _));
+    EXPECT_CALL(mock_daemon, launch(_, _));
 
     EXPECT_THAT(send_command(commands), Eq(mp::ReturnCode::Ok));
 }
@@ -963,7 +1395,7 @@ INSTANTIATE_TEST_SUITE_P(Client, TestValidNetworkOptions,
 // purge cli tests
 TEST_F(Client, purge_cmd_ok_no_args)
 {
-    EXPECT_CALL(mock_daemon, purge(_, _, _));
+    EXPECT_CALL(mock_daemon, purge(_, _));
     EXPECT_THAT(send_command({"purge"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -980,13 +1412,15 @@ TEST_F(Client, purge_cmd_help_ok)
 // exec cli tests
 TEST_F(Client, exec_cmd_double_dash_ok_cmd_arg)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _));
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
     EXPECT_THAT(send_command({"exec", "foo", "--", "cmd"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, exec_cmd_double_dash_ok_cmd_arg_with_opts)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _));
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
     EXPECT_THAT(send_command({"exec", "foo", "--", "cmd", "--foo", "--bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -997,13 +1431,15 @@ TEST_F(Client, exec_cmd_double_dash_fails_missing_cmd_arg)
 
 TEST_F(Client, exec_cmd_no_double_dash_ok_cmd_arg)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _));
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
     EXPECT_THAT(send_command({"exec", "foo", "cmd"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, exec_cmd_no_double_dash_ok_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
+    EXPECT_CALL(mock_daemon, ssh_info(_, _));
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
     EXPECT_THAT(send_command({"exec", "foo", "cmd", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1054,14 +1490,19 @@ TEST_F(Client, exec_cmd_starts_instance_if_stopped_or_suspended)
     const auto instance = "ordinary";
     const auto ssh_info_matcher = make_ssh_info_instance_matcher(instance);
     const auto start_matcher = make_instance_in_repeated_field_matcher<mp::StartRequest, 1>(instance);
-    const grpc::Status ok{}, aborted{grpc::StatusCode::ABORTED, "msg"};
+    const grpc::Status aborted{grpc::StatusCode::ABORTED, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, ssh_info(_, ssh_info_matcher, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, start(_, start_matcher, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, ssh_info(_, ssh_info_matcher, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_matcher, aborted)));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(start_matcher, ok)));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(ssh_info_matcher, ok)));
 
-    EXPECT_THAT(send_command({"exec", instance, "--", "command"}), Eq(mp::ReturnCode::Ok));
+    EXPECT_THAT(send_command({"exec", instance, "--no-map-working-directory", "--", "command"}),
+                Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, exec_cmd_fails_on_other_absent_instance)
@@ -1070,8 +1511,175 @@ TEST_F(Client, exec_cmd_fails_on_other_absent_instance)
     const auto instance_matcher = make_ssh_info_instance_matcher(instance);
     const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, instance_matcher, _)).WillOnce(Return(notfound));
-    EXPECT_THAT(send_command({"exec", instance, "--", "command"}), Eq(mp::ReturnCode::CommandFail));
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(instance_matcher, notfound)));
+    EXPECT_THAT(send_command({"exec", instance, "--no-map-working-directory", "--", "command"}),
+                Eq(mp::ReturnCode::CommandFail));
+}
+
+mp::SSHInfo make_ssh_info(const std::string& host = "222.222.222.222", int port = 22,
+                          const std::string& priv_key = mpt::fake_key_data, const std::string& username = "user")
+{
+    mp::SSHInfo ssh_info;
+
+    ssh_info.set_host(host);
+    ssh_info.set_port(port);
+    ssh_info.set_priv_key_base64(priv_key);
+    ssh_info.set_username(username);
+
+    return ssh_info;
+}
+
+mp::SSHInfoReply make_fake_ssh_info_response(const std::string& instance_name)
+{
+    mp::SSHInfoReply response;
+    (*response.mutable_ssh_info())[instance_name] = make_ssh_info();
+
+    return response;
+}
+
+struct SSHClientReturnTest : Client, WithParamInterface<int>
+{
+};
+
+TEST_P(SSHClientReturnTest, execCmdWithoutDirWorks)
+{
+    const int failure_code{GetParam()};
+
+    REPLACE(ssh_channel_get_exit_status, [&failure_code](auto) { return failure_code; });
+
+    std::string instance_name{"instance"};
+    mp::SSHInfoReply response = make_fake_ssh_info_response(instance_name);
+
+    EXPECT_CALL(mock_daemon, ssh_info(_, _))
+        .WillOnce([&response](grpc::ServerContext* context,
+                              grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(response);
+            return grpc::Status{};
+        });
+
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
+
+    EXPECT_EQ(send_command({"exec", instance_name, "--", "cmd"}), failure_code);
+}
+
+TEST_P(SSHClientReturnTest, execCmdWithDirWorks)
+{
+    const int failure_code{GetParam()};
+
+    REPLACE(ssh_channel_get_exit_status, [&failure_code](auto) { return failure_code; });
+
+    std::string instance_name{"instance"};
+    mp::SSHInfoReply response = make_fake_ssh_info_response(instance_name);
+
+    EXPECT_CALL(mock_daemon, ssh_info(_, _))
+        .WillOnce([&response](grpc::ServerContext* context,
+                              grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(response);
+            return grpc::Status{};
+        });
+
+    EXPECT_EQ(send_command({"exec", instance_name, "--working-directory", "/home/ubuntu/", "--", "cmd"}), failure_code);
+}
+
+INSTANTIATE_TEST_SUITE_P(Client, SSHClientReturnTest, Values(0, -1, 1, 127));
+
+TEST_F(Client, execCmdWithDirPrependsCd)
+{
+    std::string dir{"/home/ubuntu/"};
+    std::string cmd{"pwd"};
+
+    REPLACE(ssh_channel_request_exec, ([&dir, &cmd](ssh_channel, const char* raw_cmd) {
+                EXPECT_THAT(raw_cmd, StartsWith("'cd' '" + dir + "'"));
+                EXPECT_THAT(raw_cmd, HasSubstr("&&"));
+                EXPECT_THAT(raw_cmd, EndsWith("'" + cmd + "'"));
+
+                return SSH_OK;
+            }));
+
+    std::string instance_name{"instance"};
+    mp::SSHInfoReply response = make_fake_ssh_info_response(instance_name);
+
+    EXPECT_CALL(mock_daemon, ssh_info(_, _))
+        .WillOnce([&response](grpc::ServerContext* context,
+                              grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(response);
+            return grpc::Status{};
+        });
+
+    EXPECT_EQ(send_command({"exec", instance_name, "--working-directory", dir, "--", cmd}), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, execCmdWithDirAndSudoUsesSh)
+{
+    std::string dir{"/root/"};
+    std::vector<std::string> cmds{"sudo", "pwd"};
+
+    std::string cmds_string{cmds[0]};
+    for (size_t i = 1; i < cmds.size(); ++i)
+        cmds_string += " " + cmds[i];
+
+    REPLACE(ssh_channel_request_exec, ([&dir, &cmds_string](ssh_channel, const char* raw_cmd) {
+                EXPECT_EQ(raw_cmd, "'sudo' 'sh' '-c' 'cd " + dir + " && " + cmds_string + "'");
+
+                return SSH_OK;
+            }));
+
+    std::string instance_name{"instance"};
+    mp::SSHInfoReply response = make_fake_ssh_info_response(instance_name);
+
+    EXPECT_CALL(mock_daemon, ssh_info(_, _))
+        .WillOnce([&response](grpc::ServerContext* context,
+                              grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(response);
+            return grpc::Status{};
+        });
+
+    std::vector<std::string> full_cmdline{"exec", instance_name, "--working-directory", dir, "--"};
+    for (const auto& c : cmds)
+        full_cmdline.push_back(c);
+
+    EXPECT_EQ(send_command(full_cmdline), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, execCmdFailsIfSshExecThrows)
+{
+    std::string dir{"/home/ubuntu/"};
+    std::string cmd{"pwd"};
+
+    REPLACE(ssh_channel_request_exec, ([](ssh_channel, const char* raw_cmd) {
+                throw mp::SSHException("some exception");
+                return SSH_OK;
+            }));
+
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
+
+    std::string instance_name{"instance"};
+    mp::SSHInfoReply response = make_fake_ssh_info_response(instance_name);
+
+    EXPECT_CALL(mock_daemon, ssh_info(_, _))
+        .WillOnce([&response](grpc::ServerContext* context,
+                              grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(response);
+            return grpc::Status{};
+        });
+
+    std::stringstream cerr_stream;
+    EXPECT_EQ(send_command({"exec", instance_name, "--", cmd}, trash_stream, cerr_stream), mp::ReturnCode::CommandFail);
+    EXPECT_THAT(cerr_stream.str(), HasSubstr("exec failed: some exception\n"));
+}
+
+TEST_F(Client, execFailsOnArgumentClash)
+{
+    std::stringstream cerr_stream;
+
+    EXPECT_THAT(send_command({"exec", "instance", "--working-directory", "/home/ubuntu/", "--no-map-working-directory",
+                              "--", "cmd"},
+                             trash_stream, cerr_stream),
+                Eq(mp::ReturnCode::CommandLineError));
+
+    EXPECT_THAT(cerr_stream.str(), Eq("Options --working-directory and --no-map-working-directory clash\n"));
 }
 
 // help cli tests
@@ -1103,13 +1711,13 @@ TEST_F(Client, info_cmd_fails_no_args)
 
 TEST_F(Client, info_cmd_ok_with_one_arg)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _));
+    EXPECT_CALL(mock_daemon, info(_, _));
     EXPECT_THAT(send_command({"info", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, info_cmd_succeeds_with_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _));
+    EXPECT_CALL(mock_daemon, info(_, _));
     EXPECT_THAT(send_command({"info", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1120,7 +1728,7 @@ TEST_F(Client, info_cmd_help_ok)
 
 TEST_F(Client, info_cmd_succeeds_with_all)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _));
+    EXPECT_CALL(mock_daemon, info(_, _));
     EXPECT_THAT(send_command({"info", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1129,10 +1737,40 @@ TEST_F(Client, info_cmd_fails_with_names_and_all)
     EXPECT_THAT(send_command({"info", "--all", "foo", "bar"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
+TEST_F(Client, infoCmdDoesNotDefaultToNoRuntimeInformationAndSucceeds)
+{
+    const auto info_matcher = Property(&mp::InfoRequest::no_runtime_information, IsFalse());
+
+    EXPECT_CALL(mock_daemon, info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::InfoReply, mp::InfoRequest>(info_matcher, ok)));
+    EXPECT_THAT(send_command({"info", "name1", "name2"}), Eq(mp::ReturnCode::Ok));
+}
+
+TEST_F(Client, infoCmdSucceedsWithInstanceNamesAndNoRuntimeInformation)
+{
+    const auto info_matcher = Property(&mp::InfoRequest::no_runtime_information, IsTrue());
+
+    EXPECT_CALL(mock_daemon, info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::InfoReply, mp::InfoRequest>(info_matcher, ok)));
+    EXPECT_THAT(send_command({"info", "name3", "name4", "--no-runtime-information"}), Eq(mp::ReturnCode::Ok));
+}
+
+TEST_F(Client, infoCmdSucceedsWithAllAndNoRuntimeInformation)
+{
+    const auto info_matcher = Property(&mp::InfoRequest::no_runtime_information, IsTrue());
+
+    EXPECT_CALL(mock_daemon, info)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::InfoReply, mp::InfoRequest>(info_matcher, ok)));
+    EXPECT_THAT(send_command({"info", "name5", "--no-runtime-information"}), Eq(mp::ReturnCode::Ok));
+}
+
 // list cli tests
 TEST_F(Client, list_cmd_ok_no_args)
 {
-    EXPECT_CALL(mock_daemon, list(_, Property(&mp::ListRequest::request_ipv4, IsTrue()), _));
+    const auto list_matcher = Property(&mp::ListRequest::request_ipv4, IsTrue());
+
+    EXPECT_CALL(mock_daemon, list)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::ListReply, mp::ListRequest>(list_matcher, ok)));
     EXPECT_THAT(send_command({"list"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1148,7 +1786,10 @@ TEST_F(Client, list_cmd_help_ok)
 
 TEST_F(Client, list_cmd_no_ipv4_ok)
 {
-    EXPECT_CALL(mock_daemon, list(_, Property(&mp::ListRequest::request_ipv4, IsFalse()), _));
+    const auto list_matcher = Property(&mp::ListRequest::request_ipv4, IsFalse());
+
+    EXPECT_CALL(mock_daemon, list)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::ListReply, mp::ListRequest>(list_matcher, ok)));
     EXPECT_THAT(send_command({"list", "--no-ipv4"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1156,13 +1797,13 @@ TEST_F(Client, list_cmd_no_ipv4_ok)
 // Note: mpt::test_data_path() returns an absolute path
 TEST_F(Client, mount_cmd_good_absolute_source_path)
 {
-    EXPECT_CALL(mock_daemon, mount(_, _, _));
+    EXPECT_CALL(mock_daemon, mount(_, _));
     EXPECT_THAT(send_command({"mount", mpt::test_data_path().toStdString(), "test-vm:test"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, mount_cmd_good_relative_source_path)
 {
-    EXPECT_CALL(mock_daemon, mount(_, _, _));
+    EXPECT_CALL(mock_daemon, mount(_, _));
     EXPECT_THAT(send_command({"mount", "..", "test-vm:test"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1174,14 +1815,14 @@ TEST_F(Client, mount_cmd_fails_invalid_source_path)
 
 TEST_F(Client, mount_cmd_good_valid_uid_mappings)
 {
-    EXPECT_CALL(mock_daemon, mount(_, _, _));
+    EXPECT_CALL(mock_daemon, mount(_, _));
     EXPECT_THAT(send_command({"mount", mpt::test_data_path().toStdString(), "-u", "1000:501", "test-vm:test"}),
                 Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, mount_cmd_good_valid_large_uid_mappings)
 {
-    EXPECT_CALL(mock_daemon, mount(_, _, _));
+    EXPECT_CALL(mock_daemon, mount(_, _));
     EXPECT_THAT(send_command({"mount", mpt::test_data_path().toStdString(), "-u", "218038053:0", "test-vm:test"}),
                 Eq(mp::ReturnCode::Ok));
 }
@@ -1200,14 +1841,14 @@ TEST_F(Client, mount_cmd_fails_invalid_host_int_uid_mappings)
 
 TEST_F(Client, mount_cmd_good_valid_gid_mappings)
 {
-    EXPECT_CALL(mock_daemon, mount(_, _, _));
+    EXPECT_CALL(mock_daemon, mount(_, _));
     EXPECT_THAT(send_command({"mount", mpt::test_data_path().toStdString(), "-g", "1000:501", "test-vm:test"}),
                 Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, mount_cmd_good_valid_large_gid_mappings)
 {
-    EXPECT_CALL(mock_daemon, mount(_, _, _));
+    EXPECT_CALL(mock_daemon, mount(_, _));
     EXPECT_THAT(send_command({"mount", mpt::test_data_path().toStdString(), "-g", "218038053:0", "test-vm:test"}),
                 Eq(mp::ReturnCode::Ok));
 }
@@ -1224,6 +1865,26 @@ TEST_F(Client, mount_cmd_fails_invalid_host_int_gid_mappings)
                 Eq(mp::ReturnCode::CommandLineError));
 }
 
+TEST_F(Client, mountCmdGoodClassicMountType)
+{
+    EXPECT_CALL(mock_daemon, mount(_, _));
+    EXPECT_EQ(send_command({"mount", "-t", "classic", mpt::test_data_path().toStdString(), "test-vm:test"}),
+              mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, mountCmdGoodNativeMountType)
+{
+    EXPECT_CALL(mock_daemon, mount(_, _));
+    EXPECT_EQ(send_command({"mount", "-t", "native", mpt::test_data_path().toStdString(), "test-vm:test"}),
+              mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, mountCmdFailsBogusMountType)
+{
+    EXPECT_EQ(send_command({"mount", "-t", "bogus", mpt::test_data_path().toStdString(), "test-vm:test"}),
+              mp::ReturnCode::CommandLineError);
+}
+
 // recover cli tests
 TEST_F(Client, recover_cmd_fails_no_args)
 {
@@ -1232,13 +1893,13 @@ TEST_F(Client, recover_cmd_fails_no_args)
 
 TEST_F(Client, recover_cmd_ok_with_one_arg)
 {
-    EXPECT_CALL(mock_daemon, recover(_, _, _));
+    EXPECT_CALL(mock_daemon, recover(_, _));
     EXPECT_THAT(send_command({"recover", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, recover_cmd_succeeds_with_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, recover(_, _, _));
+    EXPECT_CALL(mock_daemon, recover(_, _));
     EXPECT_THAT(send_command({"recover", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1249,7 +1910,7 @@ TEST_F(Client, recover_cmd_help_ok)
 
 TEST_F(Client, recover_cmd_succeeds_with_all)
 {
-    EXPECT_CALL(mock_daemon, recover(_, _, _));
+    EXPECT_CALL(mock_daemon, recover(_, _));
     EXPECT_THAT(send_command({"recover", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1261,13 +1922,13 @@ TEST_F(Client, recover_cmd_fails_with_names_and_all)
 // start cli tests
 TEST_F(Client, start_cmd_ok_with_one_arg)
 {
-    EXPECT_CALL(mock_daemon, start(_, _, _));
+    EXPECT_CALL(mock_daemon, start(_, _));
     EXPECT_THAT(send_command({"start", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, start_cmd_succeeds_with_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, start(_, _, _));
+    EXPECT_CALL(mock_daemon, start(_, _));
     EXPECT_THAT(send_command({"start", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1278,7 +1939,7 @@ TEST_F(Client, start_cmd_help_ok)
 
 TEST_F(Client, start_cmd_succeeds_with_all)
 {
-    EXPECT_CALL(mock_daemon, start(_, _, _));
+    EXPECT_CALL(mock_daemon, start(_, _));
     EXPECT_THAT(send_command({"start", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1290,7 +1951,8 @@ TEST_F(Client, start_cmd_fails_with_names_and_all)
 TEST_F(Client, start_cmd_no_args_targets_petenv)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::StartRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, start(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"start"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1300,14 +1962,16 @@ TEST_F(Client, start_cmd_considers_configured_petenv)
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(custom_petenv));
 
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::StartRequest, 1>(custom_petenv);
-    EXPECT_CALL(mock_daemon, start(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"start"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, start_cmd_can_target_petenv_explicitly)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::StartRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, start(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"start", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1317,9 +1981,12 @@ TEST_F(Client, start_cmd_can_target_petenv_among_others)
     const auto petenv_matcher4 = make_instance_in_repeated_field_matcher<mp::StartRequest, 4>(petenv_name);
 
     InSequence s;
-    EXPECT_CALL(mock_daemon, start(_, _, _));
-    EXPECT_CALL(mock_daemon, start(_, petenv_matcher2, _)).Times(2);
-    EXPECT_CALL(mock_daemon, start(_, petenv_matcher4, _));
+    EXPECT_CALL(mock_daemon, start(_, _));
+    EXPECT_CALL(mock_daemon, start)
+        .Times(2)
+        .WillRepeatedly(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_matcher2, ok)));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_matcher4, ok)));
     EXPECT_THAT(send_command({"start", "primary"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"start", "foo", petenv_name}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"start", petenv_name, "bar"}), Eq(mp::ReturnCode::Ok));
@@ -1329,7 +1996,7 @@ TEST_F(Client, start_cmd_can_target_petenv_among_others)
 TEST_F(Client, start_cmd_disabled_petenv)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, start(_, _, _));
+    EXPECT_CALL(mock_daemon, start(_, _));
 
     EXPECT_THAT(send_command({"start", "foo"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"start"}), Eq(mp::ReturnCode::CommandLineError));
@@ -1338,7 +2005,7 @@ TEST_F(Client, start_cmd_disabled_petenv)
 TEST_F(Client, start_cmd_disabled_petenv_all)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, start(_, _, _));
+    EXPECT_CALL(mock_daemon, start(_, _));
 
     EXPECT_THAT(send_command({"start", "--all"}), Eq(mp::ReturnCode::Ok));
 }
@@ -1346,7 +2013,7 @@ TEST_F(Client, start_cmd_disabled_petenv_all)
 TEST_F(Client, start_cmd_disabled_petenv_help)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, start(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, start(_, _)).Times(0);
 
     EXPECT_THAT(send_command({"start", "-h"}), Eq(mp::ReturnCode::Ok));
 }
@@ -1354,7 +2021,7 @@ TEST_F(Client, start_cmd_disabled_petenv_help)
 // version cli tests
 TEST_F(Client, version_without_arg)
 {
-    EXPECT_CALL(mock_daemon, version(_, _, _));
+    EXPECT_CALL(mock_daemon, version(_, _));
     EXPECT_THAT(send_command({"version"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1365,7 +2032,7 @@ TEST_F(Client, version_with_positional_format_arg)
 
 TEST_F(Client, version_with_option_format_arg)
 {
-    EXPECT_CALL(mock_daemon, version(_, _, _)).Times(4);
+    EXPECT_CALL(mock_daemon, version(_, _)).Times(4);
     EXPECT_THAT(send_command({"version", "--format=table"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"version", "--format=yaml"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"version", "--format=json"}), Eq(mp::ReturnCode::Ok));
@@ -1387,12 +2054,10 @@ TEST_F(Client, version_info_on_failure)
 {
     const grpc::Status notfound{grpc::StatusCode::NOT_FOUND, "msg"};
 
-    EXPECT_CALL(mock_daemon, version(_, _, _)).WillOnce(Return(notfound));
+    EXPECT_CALL(mock_daemon, version(_, _)).WillOnce(Return(notfound));
     EXPECT_THAT(send_command({"version", "--format=yaml"}), Eq(mp::ReturnCode::Ok));
 }
 
-namespace
-{
 grpc::Status aborted_start_status(const std::vector<std::string>& absent_instances = {},
                                   const std::vector<std::string>& deleted_instances = {})
 {
@@ -1415,85 +2080,96 @@ std::vector<std::string> concat(const std::vector<std::string>& v1, const std::v
 
     return ret;
 }
-} // namespace
 
 TEST_F(Client, start_cmd_launches_petenv_if_absent)
 {
     const auto petenv_start_matcher = make_instance_in_repeated_field_matcher<mp::StartRequest, 1>(petenv_name);
     const auto petenv_launch_matcher = make_launch_instance_matcher(petenv_name);
-    const grpc::Status ok{}, aborted = aborted_start_status({petenv_name});
+    const grpc::Status aborted = aborted_start_status({petenv_name});
 
     EXPECT_CALL(mock_daemon, mount).WillRepeatedly(Return(ok)); // 0 or more times
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, petenv_start_matcher, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, launch(_, petenv_launch_matcher, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, start(_, petenv_start_matcher, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_start_matcher, aborted)));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(petenv_launch_matcher, ok)));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_start_matcher, ok)));
     EXPECT_THAT(send_command({"start", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, start_cmd_automounts_when_launching_petenv)
 {
-    const grpc::Status ok{}, aborted = aborted_start_status({petenv_name});
+    const grpc::Status aborted = aborted_start_status({petenv_name});
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, _, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, start(_, _, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start(_, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, mount(_, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start(_, _)).WillOnce(Return(ok));
     EXPECT_THAT(send_command({"start", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, startCmdSkipsAutomountWhenDisabled)
 {
     std::stringstream cout_stream;
-    const grpc::Status ok{}, aborted = aborted_start_status({petenv_name});
+    const grpc::Status aborted = aborted_start_status({petenv_name});
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, _, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start(_, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(ok));
     EXPECT_CALL(mock_settings, get(Eq(mp::mounts_key))).WillOnce(Return("false"));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).Times(0);
-    EXPECT_CALL(mock_daemon, start(_, _, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, mount(_, _)).Times(0);
+    EXPECT_CALL(mock_daemon, start(_, _)).WillOnce(Return(ok));
     EXPECT_THAT(send_command({"start", petenv_name}, cout_stream), Eq(mp::ReturnCode::Ok));
-    EXPECT_THAT(cout_stream.str(), HasSubstr("Skipping 'Home' mount due to disabled mounts feature\n"));
+    EXPECT_THAT(cout_stream.str(), HasSubstr("Skipping mount due to disabled mounts feature\n"));
 }
 
 TEST_F(Client, start_cmd_forwards_verbosity_to_subcommands)
 {
-    const grpc::Status ok{}, aborted = aborted_start_status({petenv_name});
+    const grpc::Status aborted = aborted_start_status({petenv_name});
     const auto verbosity = 2;
+    const auto start_verbosity_matcher = make_request_verbosity_matcher<mp::StartRequest>(verbosity);
+    const auto launch_verbosity_matcher = make_request_verbosity_matcher<mp::LaunchRequest>(verbosity);
+    const auto mount_verbosity_matcher = make_request_verbosity_matcher<mp::MountRequest>(verbosity);
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, make_request_verbosity_matcher<mp::StartRequest>(verbosity), _))
-        .WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, launch(_, make_request_verbosity_matcher<mp::LaunchRequest>(verbosity), _))
-        .WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, make_request_verbosity_matcher<mp::MountRequest>(verbosity), _))
-        .WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, start(_, make_request_verbosity_matcher<mp::StartRequest>(verbosity), _))
-        .WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(start_verbosity_matcher, aborted)));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(launch_verbosity_matcher, ok)));
+    EXPECT_CALL(mock_daemon, mount)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::MountReply, mp::MountRequest>(mount_verbosity_matcher, ok)));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(start_verbosity_matcher, ok)));
     EXPECT_THAT(send_command({"start", "-vv"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, start_cmd_forwards_timeout_to_subcommands)
 {
-    const grpc::Status ok{}, aborted = aborted_start_status({petenv_name});
+    const grpc::Status aborted = aborted_start_status({petenv_name});
     const auto timeout = 123;
+    const auto start_timeout_matcher = make_request_timeout_matcher<mp::StartRequest>(timeout);
+    const auto launch_timeout_matcher = make_request_timeout_matcher<mp::LaunchRequest>(timeout);
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, make_request_timeout_matcher<mp::StartRequest>(timeout), _))
-        .WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, launch(_, make_request_timeout_matcher<mp::LaunchRequest>(timeout), _))
-        .WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(start_timeout_matcher, aborted)));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(launch_timeout_matcher, ok)));
     EXPECT_CALL(mock_daemon, mount).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, start(_, make_request_timeout_matcher<mp::StartRequest>(timeout), _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(start_timeout_matcher, ok)));
     EXPECT_THAT(send_command({"start", "--timeout", std::to_string(timeout)}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, startCmdFailsWhenUnableToRetrieveAutomountSetting)
 {
-    const auto ok = grpc::Status{};
     const auto aborted = aborted_start_status({petenv_name});
     const auto except = mp::RemoteHandlerException{grpc::Status{grpc::StatusCode::INTERNAL, "oops"}};
 
@@ -1507,14 +2183,13 @@ TEST_F(Client, startCmdFailsWhenUnableToRetrieveAutomountSetting)
 
 TEST_F(Client, start_cmd_fails_when_automounting_in_petenv_fails)
 {
-    const auto ok = grpc::Status{};
     const auto aborted = aborted_start_status({petenv_name});
     const auto mount_failure = grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, _, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, launch(_, _, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, mount(_, _, _)).WillOnce(Return(mount_failure));
+    EXPECT_CALL(mock_daemon, start(_, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, launch(_, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, mount(_, _)).WillOnce(Return(mount_failure));
     EXPECT_THAT(send_command({"start", petenv_name}), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -1524,14 +2199,18 @@ TEST_F(Client, start_cmd_launches_petenv_if_absent_among_others_present)
 
     const auto instance_start_matcher = make_instances_sequence_matcher<mp::StartRequest>(instances);
     const auto petenv_launch_matcher = make_launch_instance_matcher(petenv_name);
-    const grpc::Status ok{}, aborted = aborted_start_status({petenv_name});
+    const grpc::Status aborted = aborted_start_status({petenv_name});
 
     EXPECT_CALL(mock_daemon, mount).WillRepeatedly(Return(ok)); // 0 or more times
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, instance_start_matcher, _)).WillOnce(Return(aborted));
-    EXPECT_CALL(mock_daemon, launch(_, petenv_launch_matcher, _)).WillOnce(Return(ok));
-    EXPECT_CALL(mock_daemon, start(_, instance_start_matcher, _)).WillOnce(Return(ok));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(instance_start_matcher, aborted)));
+    EXPECT_CALL(mock_daemon, launch)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::LaunchReply, mp::LaunchRequest>(petenv_launch_matcher, ok)));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(instance_start_matcher, ok)));
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1542,7 +2221,9 @@ TEST_F(Client, start_cmd_fails_if_petenv_if_absent_amont_others_absent)
     const auto instance_start_matcher = make_instances_sequence_matcher<mp::StartRequest>(instances);
     const auto aborted = aborted_start_status({std::next(std::cbegin(instances), 2), std::cend(instances)});
 
-    EXPECT_CALL(mock_daemon, start(_, instance_start_matcher, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(instance_start_matcher, aborted)));
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -1553,7 +2234,9 @@ TEST_F(Client, start_cmd_fails_if_petenv_if_absent_amont_others_deleted)
     const auto instance_start_matcher = make_instances_sequence_matcher<mp::StartRequest>(instances);
     const auto aborted = aborted_start_status({}, {instances.front()});
 
-    EXPECT_CALL(mock_daemon, start(_, instance_start_matcher, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(instance_start_matcher, aborted)));
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -1563,7 +2246,9 @@ TEST_F(Client, start_cmd_fails_if_petenv_present_but_deleted)
     const grpc::Status aborted = aborted_start_status({}, {petenv_name});
 
     InSequence seq;
-    EXPECT_CALL(mock_daemon, start(_, petenv_start_matcher, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(petenv_start_matcher, aborted)));
     EXPECT_THAT(send_command({"start", petenv_name}), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -1574,7 +2259,9 @@ TEST_F(Client, start_cmd_fails_if_petenv_present_but_deleted_among_others)
     const auto instance_start_matcher = make_instances_sequence_matcher<mp::StartRequest>(instances);
     const auto aborted = aborted_start_status({}, {instances.front()});
 
-    EXPECT_CALL(mock_daemon, start(_, instance_start_matcher, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(instance_start_matcher, aborted)));
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -1585,7 +2272,9 @@ TEST_F(Client, start_cmd_fails_on_other_absent_instance)
     const auto instance_start_matcher = make_instances_sequence_matcher<mp::StartRequest>(instances);
     const auto aborted = aborted_start_status({}, {"O_o"});
 
-    EXPECT_CALL(mock_daemon, start(_, instance_start_matcher, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(instance_start_matcher, aborted)));
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::CommandFail));
 }
 
@@ -1596,34 +2285,38 @@ TEST_F(Client, start_cmd_fails_on_other_absent_instances_with_petenv)
 
     const auto instance_start_matcher = make_instances_sequence_matcher<mp::StartRequest>(instances);
     const auto aborted = aborted_start_status({}, {"zzz"});
-    EXPECT_CALL(mock_daemon, start(_, instance_start_matcher, _)).WillOnce(Return(aborted));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(instance_start_matcher, aborted)));
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::CommandFail));
 }
 
 TEST_F(Client, start_cmd_does_not_add_petenv_to_others)
 {
     const auto matcher = make_instances_matcher<mp::StartRequest>(ElementsAre(StrEq("foo"), StrEq("bar")));
-    EXPECT_CALL(mock_daemon, start(_, matcher, _));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"start", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, start_cmd_does_not_add_petenv_to_all)
 {
     const auto matcher = make_instances_matcher<mp::StartRequest>(IsEmpty());
-    EXPECT_CALL(mock_daemon, start(_, matcher, _));
+    EXPECT_CALL(mock_daemon, start)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StartReply, mp::StartRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"start", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
 // stop cli tests
 TEST_F(Client, stop_cmd_ok_with_one_arg)
 {
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
     EXPECT_THAT(send_command({"stop", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, stop_cmd_succeeds_with_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
     EXPECT_THAT(send_command({"stop", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1634,7 +2327,7 @@ TEST_F(Client, stop_cmd_help_ok)
 
 TEST_F(Client, stop_cmd_succeeds_with_all)
 {
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
     EXPECT_THAT(send_command({"stop", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1646,7 +2339,8 @@ TEST_F(Client, stop_cmd_fails_with_names_and_all)
 TEST_F(Client, stop_cmd_no_args_targets_petenv)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::StopRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, stop(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"stop"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1656,14 +2350,16 @@ TEST_F(Client, stop_cmd_considers_configured_petenv)
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(custom_petenv));
 
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::StopRequest, 1>(custom_petenv);
-    EXPECT_CALL(mock_daemon, stop(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"stop"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, stop_cmd_can_target_petenv_explicitly)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::StopRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, stop(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"stop", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1673,9 +2369,12 @@ TEST_F(Client, stop_cmd_can_target_petenv_among_others)
     const auto petenv_matcher4 = make_instance_in_repeated_field_matcher<mp::StopRequest, 4>(petenv_name);
 
     InSequence s;
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
-    EXPECT_CALL(mock_daemon, stop(_, petenv_matcher2, _)).Times(2);
-    EXPECT_CALL(mock_daemon, stop(_, petenv_matcher4, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .Times(2)
+        .WillRepeatedly(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(petenv_matcher2, ok)));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(petenv_matcher4, ok)));
     EXPECT_THAT(send_command({"stop", "primary"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"stop", "foo", petenv_name}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"stop", petenv_name, "bar"}), Eq(mp::ReturnCode::Ok));
@@ -1685,14 +2384,16 @@ TEST_F(Client, stop_cmd_can_target_petenv_among_others)
 TEST_F(Client, stop_cmd_does_not_add_petenv_to_others)
 {
     const auto matcher = make_instances_matcher<mp::StopRequest>(ElementsAre(StrEq("foo"), StrEq("bar")));
-    EXPECT_CALL(mock_daemon, stop(_, matcher, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"stop", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, stop_cmd_does_not_add_petenv_to_all)
 {
     const auto matcher = make_instances_matcher<mp::StopRequest>(IsEmpty());
-    EXPECT_CALL(mock_daemon, stop(_, matcher, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"stop", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1703,13 +2404,13 @@ TEST_F(Client, stop_cmd_fails_with_time_and_cancel)
 
 TEST_F(Client, stop_cmd_succeeds_with_plus_time)
 {
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
     EXPECT_THAT(send_command({"stop", "foo", "--time", "+10"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, stop_cmd_succeeds_with_no_plus_time)
 {
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
     EXPECT_THAT(send_command({"stop", "foo", "--time", "10"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1730,7 +2431,7 @@ TEST_F(Client, stop_cmd_fails_with_time_suffix)
 
 TEST_F(Client, stop_cmd_succeds_with_cancel)
 {
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
     EXPECT_THAT(send_command({"stop", "foo", "--cancel"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1739,7 +2440,8 @@ TEST_F(Client, stop_cmd_no_args_time_option_delays_petenv_shutdown)
     const auto delay = 5;
     const auto matcher = AllOf(make_instance_in_repeated_field_matcher<mp::StopRequest, 1>(petenv_name),
                                Property(&mp::StopRequest::time_minutes, delay));
-    EXPECT_CALL(mock_daemon, stop(_, matcher, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"stop", "--time", std::to_string(delay)}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1747,7 +2449,8 @@ TEST_F(Client, stop_cmd_no_args_cancel_option_cancels_delayed_petenv_shutdown)
 {
     const auto matcher = AllOf(make_instance_in_repeated_field_matcher<mp::StopRequest, 1>(petenv_name),
                                Property(&mp::StopRequest::cancel_shutdown, true));
-    EXPECT_CALL(mock_daemon, stop(_, matcher, _));
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"stop", "--cancel"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1768,7 +2471,7 @@ TEST_F(Client, stop_cmd_disabled_petenv)
 TEST_F(Client, stop_cmd_disabled_petenv_with_instance)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
 
     EXPECT_THAT(send_command({"stop"}), Eq(mp::ReturnCode::CommandLineError));
     EXPECT_THAT(send_command({"stop", "foo"}), Eq(mp::ReturnCode::Ok));
@@ -1786,7 +2489,7 @@ TEST_F(Client, stop_cmd_disabled_petenv_help)
 TEST_F(Client, stop_cmd_disabled_petenv_all)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, stop(_, _, _));
+    EXPECT_CALL(mock_daemon, stop(_, _));
 
     EXPECT_THAT(send_command({"stop", "--all"}), Eq(mp::ReturnCode::Ok));
 }
@@ -1794,14 +2497,14 @@ TEST_F(Client, stop_cmd_disabled_petenv_all)
 // suspend cli tests
 TEST_F(Client, suspend_cmd_ok_with_one_arg)
 {
-    EXPECT_CALL(mock_daemon, suspend(_, _, _)).Times(2);
+    EXPECT_CALL(mock_daemon, suspend(_, _)).Times(2);
     EXPECT_THAT(send_command({"suspend", "foo"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"suspend", "primary"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, suspend_cmd_succeeds_with_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, suspend(_, _, _));
+    EXPECT_CALL(mock_daemon, suspend(_, _));
     EXPECT_THAT(send_command({"suspend", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1812,14 +2515,15 @@ TEST_F(Client, suspend_cmd_help_ok)
 
 TEST_F(Client, suspend_cmd_succeeds_with_all)
 {
-    EXPECT_CALL(mock_daemon, suspend(_, _, _));
+    EXPECT_CALL(mock_daemon, suspend(_, _));
     EXPECT_THAT(send_command({"suspend", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, suspend_cmd_no_args_targets_petenv)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::SuspendRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, suspend(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, suspend)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SuspendReply, mp::SuspendRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"suspend"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1829,14 +2533,16 @@ TEST_F(Client, suspend_cmd_considers_configured_petenv)
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(custom_petenv));
 
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::SuspendRequest, 1>(custom_petenv);
-    EXPECT_CALL(mock_daemon, suspend(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, suspend)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SuspendReply, mp::SuspendRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"suspend"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, suspend_cmd_can_target_petenv_explicitly)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::SuspendRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, suspend(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, suspend)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SuspendReply, mp::SuspendRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"suspend", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1846,8 +2552,12 @@ TEST_F(Client, suspend_cmd_can_target_petenv_among_others)
     const auto petenv_matcher4 = make_instance_in_repeated_field_matcher<mp::SuspendRequest, 4>(petenv_name);
 
     InSequence s;
-    EXPECT_CALL(mock_daemon, suspend(_, petenv_matcher2, _)).Times(2);
-    EXPECT_CALL(mock_daemon, suspend(_, petenv_matcher4, _));
+    EXPECT_CALL(mock_daemon, suspend)
+        .Times(2)
+        .WillRepeatedly(
+            WithArg<1>(check_request_and_return<mp::SuspendReply, mp::SuspendRequest>(petenv_matcher2, ok)));
+    EXPECT_CALL(mock_daemon, suspend)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SuspendReply, mp::SuspendRequest>(petenv_matcher4, ok)));
     EXPECT_THAT(send_command({"suspend", "foo", petenv_name}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"suspend", petenv_name, "bar"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"suspend", "foo", petenv_name, "bar", "baz"}), Eq(mp::ReturnCode::Ok));
@@ -1856,14 +2566,16 @@ TEST_F(Client, suspend_cmd_can_target_petenv_among_others)
 TEST_F(Client, suspend_cmd_does_not_add_petenv_to_others)
 {
     const auto matcher = make_instances_matcher<mp::SuspendRequest>(ElementsAre(StrEq("foo"), StrEq("bar")));
-    EXPECT_CALL(mock_daemon, suspend(_, matcher, _));
+    EXPECT_CALL(mock_daemon, suspend)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SuspendReply, mp::SuspendRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"suspend", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, suspend_cmd_does_not_add_petenv_to_all)
 {
     const auto matcher = make_instances_matcher<mp::SuspendRequest>(IsEmpty());
-    EXPECT_CALL(mock_daemon, suspend(_, matcher, _));
+    EXPECT_CALL(mock_daemon, suspend)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::SuspendReply, mp::SuspendRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"suspend", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1875,7 +2587,7 @@ TEST_F(Client, suspend_cmd_fails_with_names_and_all)
 TEST_F(Client, suspend_cmd_disabled_petenv)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, suspend(_, _, _));
+    EXPECT_CALL(mock_daemon, suspend(_, _));
 
     EXPECT_THAT(send_command({"suspend"}), Eq(mp::ReturnCode::CommandLineError));
     EXPECT_THAT(send_command({"suspend", "foo"}), Eq(mp::ReturnCode::Ok));
@@ -1891,7 +2603,7 @@ TEST_F(Client, suspend_cmd_disabled_petenv_help)
 TEST_F(Client, suspend_cmd_disabled_petenv_all)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, suspend(_, _, _));
+    EXPECT_CALL(mock_daemon, suspend(_, _));
 
     EXPECT_THAT(send_command({"suspend", "--all"}), Eq(mp::ReturnCode::Ok));
 }
@@ -1899,14 +2611,14 @@ TEST_F(Client, suspend_cmd_disabled_petenv_all)
 // restart cli tests
 TEST_F(Client, restart_cmd_ok_with_one_arg)
 {
-    EXPECT_CALL(mock_daemon, restart(_, _, _)).Times(2);
+    EXPECT_CALL(mock_daemon, restart(_, _)).Times(2);
     EXPECT_THAT(send_command({"restart", "foo"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"restart", "primary"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, restart_cmd_succeeds_with_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, restart(_, _, _));
+    EXPECT_CALL(mock_daemon, restart(_, _));
     EXPECT_THAT(send_command({"restart", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1917,14 +2629,15 @@ TEST_F(Client, restart_cmd_help_ok)
 
 TEST_F(Client, restart_cmd_succeeds_with_all)
 {
-    EXPECT_CALL(mock_daemon, restart(_, _, _));
+    EXPECT_CALL(mock_daemon, restart(_, _));
     EXPECT_THAT(send_command({"restart", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, restart_cmd_no_args_targets_petenv)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::RestartRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, restart(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, restart)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"restart"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1934,14 +2647,16 @@ TEST_F(Client, restart_cmd_considers_configured_petenv)
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(custom_petenv));
 
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::RestartRequest, 1>(custom_petenv);
-    EXPECT_CALL(mock_daemon, restart(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, restart)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"restart"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, restart_cmd_can_target_petenv_explicitly)
 {
     const auto petenv_matcher = make_instance_in_repeated_field_matcher<mp::RestartRequest, 1>(petenv_name);
-    EXPECT_CALL(mock_daemon, restart(_, petenv_matcher, _));
+    EXPECT_CALL(mock_daemon, restart)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"restart", petenv_name}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1951,8 +2666,12 @@ TEST_F(Client, restart_cmd_can_target_petenv_among_others)
     const auto petenv_matcher4 = make_instance_in_repeated_field_matcher<mp::RestartRequest, 4>(petenv_name);
 
     InSequence s;
-    EXPECT_CALL(mock_daemon, restart(_, petenv_matcher2, _)).Times(2);
-    EXPECT_CALL(mock_daemon, restart(_, petenv_matcher4, _));
+    EXPECT_CALL(mock_daemon, restart)
+        .Times(2)
+        .WillRepeatedly(
+            WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(petenv_matcher2, ok)));
+    EXPECT_CALL(mock_daemon, restart)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(petenv_matcher4, ok)));
     EXPECT_THAT(send_command({"restart", "foo", petenv_name}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"restart", petenv_name, "bar"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"restart", "foo", petenv_name, "bar", "baz"}), Eq(mp::ReturnCode::Ok));
@@ -1961,14 +2680,16 @@ TEST_F(Client, restart_cmd_can_target_petenv_among_others)
 TEST_F(Client, restart_cmd_does_not_add_petenv_to_others)
 {
     const auto matcher = make_instances_matcher<mp::RestartRequest>(ElementsAre(StrEq("foo"), StrEq("bar")));
-    EXPECT_CALL(mock_daemon, restart(_, matcher, _));
+    EXPECT_CALL(mock_daemon, restart)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"restart", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, restart_cmd_does_not_add_petenv_to_all)
 {
     const auto matcher = make_instances_matcher<mp::RestartRequest>(IsEmpty());
-    EXPECT_CALL(mock_daemon, restart(_, matcher, _));
+    EXPECT_CALL(mock_daemon, restart)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(matcher, ok)));
     EXPECT_THAT(send_command({"restart", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -1991,10 +2712,22 @@ TEST_F(Client, restart_cmd_fails_with_unknown_options)
     EXPECT_THAT(send_command({"restart", "--cancel", "foo"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
+TEST_F(Client, restart_cmd_fails_if_petenv_nonexistent)
+{
+    const auto petenv_start_matcher = make_instance_in_repeated_field_matcher<mp::RestartRequest, 1>(petenv_name);
+    const grpc::Status aborted = aborted_start_status({}, {petenv_name});
+
+    InSequence seq;
+    EXPECT_CALL(mock_daemon, restart)
+        .WillOnce(
+            WithArg<1>(check_request_and_return<mp::RestartReply, mp::RestartRequest>(petenv_start_matcher, aborted)));
+    EXPECT_THAT(send_command({"restart"}), Eq(mp::ReturnCode::CommandFail));
+}
+
 TEST_F(Client, restart_cmd_disabled_petenv)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, restart(_, _, _));
+    EXPECT_CALL(mock_daemon, restart(_, _));
 
     EXPECT_THAT(send_command({"restart"}), Eq(mp::ReturnCode::CommandLineError));
     EXPECT_THAT(send_command({"restart", "foo"}), Eq(mp::ReturnCode::Ok));
@@ -2010,7 +2743,7 @@ TEST_F(Client, restart_cmd_disabled_petenv_help)
 TEST_F(Client, restart_cmd_disabled_petenv_all)
 {
     EXPECT_CALL(mock_settings, get(Eq(mp::petenv_key))).WillRepeatedly(Return(""));
-    EXPECT_CALL(mock_daemon, restart(_, _, _));
+    EXPECT_CALL(mock_daemon, restart(_, _));
 
     EXPECT_THAT(send_command({"restart", "--all"}), Eq(mp::ReturnCode::Ok));
 }
@@ -2023,13 +2756,13 @@ TEST_F(Client, delete_cmd_fails_no_args)
 
 TEST_F(Client, delete_cmd_ok_with_one_arg)
 {
-    EXPECT_CALL(mock_daemon, delet(_, _, _));
+    EXPECT_CALL(mock_daemon, delet(_, _));
     EXPECT_THAT(send_command({"delete", "foo"}), Eq(mp::ReturnCode::Ok));
 }
 
 TEST_F(Client, delete_cmd_succeeds_with_multiple_args)
 {
-    EXPECT_CALL(mock_daemon, delet(_, _, _));
+    EXPECT_CALL(mock_daemon, delet(_, _));
     EXPECT_THAT(send_command({"delete", "foo", "bar"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -2040,7 +2773,7 @@ TEST_F(Client, delete_cmd_help_ok)
 
 TEST_F(Client, delete_cmd_succeeds_with_all)
 {
-    EXPECT_CALL(mock_daemon, delet(_, _, _));
+    EXPECT_CALL(mock_daemon, delet(_, _));
     EXPECT_THAT(send_command({"delete", "--all"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -2051,7 +2784,7 @@ TEST_F(Client, delete_cmd_fails_with_names_and_all)
 
 TEST_F(Client, delete_cmd_accepts_purge_option)
 {
-    EXPECT_CALL(mock_daemon, delet(_, _, _)).Times(2);
+    EXPECT_CALL(mock_daemon, delet(_, _)).Times(2);
     EXPECT_THAT(send_command({"delete", "--purge", "foo"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"delete", "-p", "bar"}), Eq(mp::ReturnCode::Ok));
 }
@@ -2059,7 +2792,7 @@ TEST_F(Client, delete_cmd_accepts_purge_option)
 // find cli tests
 TEST_F(Client, find_cmd_unsupported_option_ok)
 {
-    EXPECT_CALL(mock_daemon, find(_, _, _));
+    EXPECT_CALL(mock_daemon, find(_, _));
     EXPECT_THAT(send_command({"find", "--show-unsupported"}), Eq(mp::ReturnCode::Ok));
 }
 
@@ -2322,7 +3055,7 @@ INSTANTIATE_TEST_SUITE_P(Client, HelpTestsuite,
                          Values(std::make_pair(std::string{"alias"},
                                                "Create an alias to be executed on a given instance.\n"),
                                 std::make_pair(std::string{"aliases"}, "List available aliases\n"),
-                                std::make_pair(std::string{"unalias"}, "Remove an alias\n")));
+                                std::make_pair(std::string{"unalias"}, "Remove aliases\n")));
 
 TEST_F(Client, command_help_is_different_than_general_help)
 {
@@ -2396,8 +3129,11 @@ TEST_F(AuthenticateCommandClient, authenticateCmdAcceptsEnteredPassphrase)
 
     cin.str(passphrase + "\n");
 
-    EXPECT_CALL(mock_daemon, authenticate(_, _, _)).WillOnce([&passphrase](auto, const auto request, auto) {
-        EXPECT_EQ(request->passphrase(), passphrase);
+    EXPECT_CALL(mock_daemon, authenticate(_, _)).WillOnce([&passphrase](auto, auto* server) {
+        mp::AuthenticateRequest request;
+        server->Read(&request);
+
+        EXPECT_EQ(request.passphrase(), passphrase);
         return grpc::Status{};
     });
 
@@ -2484,8 +3220,8 @@ struct TimeoutSuite : Client, WithParamInterface<std::string>
     }
 
     template <typename RequestType, typename ReplyType>
-    static grpc::Status request_sleeper(grpc::ServerContext* context, const RequestType* request,
-                                        grpc::ServerWriter<ReplyType>* response)
+    static grpc::Status request_sleeper(grpc::ServerContext* context,
+                                        grpc::ServerReaderWriter<ReplyType, RequestType>* response)
     {
         std::this_thread::sleep_for(std::chrono::seconds(2));
         return grpc::Status::OK;
@@ -2523,14 +3259,15 @@ struct ClientLogMessageSuite : Client, WithParamInterface<std::vector<std::strin
     {
         Client::SetUp();
 
-        ON_CALL(mock_daemon, launch).WillByDefault(reply_log_message<mp::LaunchReply>);
-        ON_CALL(mock_daemon, mount).WillByDefault(reply_log_message<mp::MountReply>);
-        ON_CALL(mock_daemon, start).WillByDefault(reply_log_message<mp::StartReply>);
-        ON_CALL(mock_daemon, version).WillByDefault(reply_log_message<mp::VersionReply>);
+        ON_CALL(mock_daemon, launch).WillByDefault(reply_log_message<mp::LaunchReply, mp::LaunchRequest>);
+        ON_CALL(mock_daemon, mount).WillByDefault(reply_log_message<mp::MountReply, mp::MountRequest>);
+        ON_CALL(mock_daemon, start).WillByDefault(reply_log_message<mp::StartReply, mp::StartRequest>);
+        ON_CALL(mock_daemon, restart).WillByDefault(reply_log_message<mp::RestartReply, mp::RestartRequest>);
+        ON_CALL(mock_daemon, version).WillByDefault(reply_log_message<mp::VersionReply, mp::VersionRequest>);
     }
 
-    template <typename ReplyType>
-    static grpc::Status reply_log_message(Unused, Unused, grpc::ServerWriter<ReplyType>* response)
+    template <typename ReplyType, typename RequestType>
+    static grpc::Status reply_log_message(Unused, grpc::ServerReaderWriter<ReplyType, RequestType>* response)
     {
         ReplyType reply;
         reply.set_log_line(log_message);
@@ -2548,6 +3285,7 @@ TEST_P(ClientLogMessageSuite, clientPrintsOutExpectedLogMessage)
     EXPECT_CALL(mock_daemon, mount).Times(AtMost(1));
     EXPECT_CALL(mock_daemon, start).Times(AtMost(1));
     EXPECT_CALL(mock_daemon, version).Times(AtMost(1));
+    EXPECT_CALL(mock_daemon, restart).Times(AtMost(1));
 
     std::stringstream cerr_stream;
 
@@ -2559,39 +3297,23 @@ TEST_P(ClientLogMessageSuite, clientPrintsOutExpectedLogMessage)
 INSTANTIATE_TEST_SUITE_P(Client, ClientLogMessageSuite,
                          Values(std::vector<std::string>{"launch"},
                                 std::vector<std::string>{"mount", "..", "test-vm:test"},
-                                std::vector<std::string>{"start"}, std::vector<std::string>{"version"}));
-
-auto info_function = [](grpc::ServerContext*, const mp::InfoRequest* request,
-                        grpc::ServerWriter<mp::InfoReply>* response) {
-    mp::InfoReply info_reply;
-
-    if (request->instance_names().instance_name(0) == "primary")
-    {
-        auto vm_info = info_reply.add_info();
-        vm_info->set_name("primary");
-        vm_info->mutable_instance_status()->set_status(mp::InstanceStatus::RUNNING);
-
-        response->Write(info_reply);
-
-        return grpc::Status{};
-    }
-    else
-        return grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
-};
+                                std::vector<std::string>{"start"}, std::vector<std::string>{"version"},
+                                std::vector<std::string>{"restart"}, std::vector<std::string>{"version"}));
 
 TEST_F(ClientAlias, alias_creates_alias)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}}});
 
-    EXPECT_EQ(send_command({"alias", "primary:another_command", "another_alias"}), mp::ReturnCode::Ok);
+    EXPECT_EQ(send_command({"alias", "primary:another_command", "another_alias", "--no-map-working-directory"}),
+              mp::ReturnCode::Ok);
 
     std::stringstream cout_stream;
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), "Alias,Instance,Command\nan_alias,an_instance,a_command\nanother_alias,"
-                                   "primary,another_command\n");
+    EXPECT_THAT(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,map\n"
+                                                "another_alias,primary,another_command,default\n");
 }
 
 struct ClientAliasNameSuite : public ClientAlias,
@@ -2603,19 +3325,18 @@ TEST_P(ClientAliasNameSuite, creates_correct_default_alias_name)
 {
     const auto& [command, path] = GetParam();
 
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::vector<std::string> arguments{"alias"};
     arguments.push_back(fmt::format("primary:{}{}", path, command));
+    arguments.push_back("--no-map-working-directory");
 
     EXPECT_EQ(send_command(arguments), mp::ReturnCode::Ok);
 
     std::stringstream cout_stream;
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), fmt::format("Alias,Instance,Command\n"
-                                               "{},primary,{}{}\n",
-                                               command, path, command));
+    EXPECT_THAT(cout_stream.str(), fmt::format(csv_header + "{},primary,{}{},default\n", command, path, command));
 }
 
 INSTANTIATE_TEST_SUITE_P(ClientAlias, ClientAliasNameSuite,
@@ -2626,7 +3347,7 @@ TEST_F(ClientAlias, fails_if_cannot_write_script)
 {
     EXPECT_CALL(*mock_platform, create_alias_script(_, _)).Times(1).WillRepeatedly(Throw(std::runtime_error("aaa")));
 
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::stringstream cerr_stream;
     EXPECT_EQ(send_command({"alias", "primary:command"}, trash_stream, cerr_stream), mp::ReturnCode::CommandLineError);
@@ -2635,14 +3356,14 @@ TEST_F(ClientAlias, fails_if_cannot_write_script)
     std::stringstream cout_stream;
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), "Alias,Instance,Command\n");
+    EXPECT_THAT(cout_stream.str(), csv_header);
 }
 
 TEST_F(ClientAlias, alias_does_not_overwrite_alias)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}}});
 
     std::stringstream cerr_stream;
     EXPECT_EQ(send_command({"alias", "primary:another_command", "an_alias"}, trash_stream, cerr_stream),
@@ -2652,7 +3373,7 @@ TEST_F(ClientAlias, alias_does_not_overwrite_alias)
     std::stringstream cout_stream;
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), "Alias,Instance,Command\nan_alias,an_instance,a_command\n");
+    EXPECT_THAT(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,map\n");
 }
 
 struct ArgumentCheckTestsuite
@@ -2665,7 +3386,7 @@ TEST_P(ArgumentCheckTestsuite, answers_correctly)
 {
     auto [arguments, expected_return_code, expected_cout, expected_cerr] = GetParam();
 
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::stringstream cout_stream, cerr_stream;
     EXPECT_EQ(send_command(arguments, cout_stream, cerr_stream), expected_return_code);
@@ -2727,18 +3448,19 @@ TEST_F(ClientAlias, too_many_aliases_arguments)
 
 TEST_F(ClientAlias, execute_existing_alias)
 {
-    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command"}}});
+    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command", "map"}}});
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
+    EXPECT_CALL(mock_daemon, ssh_info(_, _));
 
     EXPECT_EQ(send_command({"some_alias"}), mp::ReturnCode::Ok);
 }
 
-TEST_F(ClientAlias, execute_unexisting_alias)
+TEST_F(ClientAlias, execute_nonexistent_alias)
 {
-    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command"}}});
+    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command", "map"}}});
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).Times(0);
 
     std::stringstream cout_stream;
     EXPECT_EQ(send_command({"other_undefined_alias"}, cout_stream), mp::ReturnCode::CommandLineError);
@@ -2747,18 +3469,19 @@ TEST_F(ClientAlias, execute_unexisting_alias)
 
 TEST_F(ClientAlias, execute_alias_with_arguments)
 {
-    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command"}}});
+    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command", "map"}}});
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _));
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
+    EXPECT_CALL(mock_daemon, ssh_info(_, _));
 
     EXPECT_EQ(send_command({"some_alias", "some_argument"}), mp::ReturnCode::Ok);
 }
 
 TEST_F(ClientAlias, fails_executing_alias_without_separator)
 {
-    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command"}}});
+    populate_db_file(AliasesVector{{"some_alias", {"some_instance", "some_command", "map"}}});
 
-    EXPECT_CALL(mock_daemon, ssh_info(_, _, _)).Times(0);
+    EXPECT_CALL(mock_daemon, ssh_info(_, _)).Times(0);
 
     std::stringstream cerr_stream;
     EXPECT_EQ(send_command({"some_alias", "--some-option"}, trash_stream, cerr_stream),
@@ -2767,11 +3490,11 @@ TEST_F(ClientAlias, fails_executing_alias_without_separator)
                                              "multipass <alias> -- <arguments>\n"));
 }
 
-TEST_F(ClientAlias, alias_refuses_creation_unexisting_instance)
+TEST_F(ClientAlias, alias_refuses_creation_nonexistent_instance)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}}});
 
     std::stringstream cout_stream, cerr_stream;
     send_command({"alias", "foo:another_command", "another_alias"}, cout_stream, cerr_stream);
@@ -2781,14 +3504,14 @@ TEST_F(ClientAlias, alias_refuses_creation_unexisting_instance)
 
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), "Alias,Instance,Command\nan_alias,an_instance,a_command\n");
+    EXPECT_THAT(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,map\n");
 }
 
 TEST_F(ClientAlias, alias_refuses_creation_rpc_error)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).WillOnce(Return(grpc::Status{grpc::StatusCode::NOT_FOUND, "msg"}));
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(Return(grpc::Status{grpc::StatusCode::NOT_FOUND, "msg"}));
 
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}}});
 
     std::stringstream cout_stream, cerr_stream;
     send_command({"alias", "foo:another_command", "another_alias"}, cout_stream, cerr_stream);
@@ -2798,28 +3521,28 @@ TEST_F(ClientAlias, alias_refuses_creation_rpc_error)
 
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), "Alias,Instance,Command\nan_alias,an_instance,a_command\n");
+    EXPECT_THAT(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,map\n");
 }
 
 TEST_F(ClientAlias, unalias_removes_existing_alias)
 {
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}},
-                                   {"another_alias", {"another_instance", "another_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "default"}},
+                                   {"another_alias", {"another_instance", "another_command", "map"}}});
 
     EXPECT_EQ(send_command({"unalias", "another_alias"}), mp::ReturnCode::Ok);
 
     std::stringstream cout_stream;
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), "Alias,Instance,Command\nan_alias,an_instance,a_command\n");
+    EXPECT_THAT(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,default\n");
 }
 
 TEST_F(ClientAlias, unalias_succeeds_even_if_script_cannot_be_removed)
 {
     EXPECT_CALL(*mock_platform, remove_alias_script(_)).Times(1).WillRepeatedly(Throw(std::runtime_error("bbb")));
 
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}},
-                                   {"another_alias", {"another_instance", "another_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}},
+                                   {"another_alias", {"another_instance", "another_command", "default"}}});
 
     std::stringstream cerr_stream;
     EXPECT_EQ(send_command({"unalias", "another_alias"}, trash_stream, cerr_stream), mp::ReturnCode::Ok);
@@ -2828,45 +3551,94 @@ TEST_F(ClientAlias, unalias_succeeds_even_if_script_cannot_be_removed)
     std::stringstream cout_stream;
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_THAT(cout_stream.str(), "Alias,Instance,Command\nan_alias,an_instance,a_command\n");
+    EXPECT_THAT(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,map\n");
 }
 
-TEST_F(ClientAlias, unalias_does_not_remove_unexisting_alias)
+TEST_F(ClientAlias, unaliasDoesNotRemoveNonexistentAlias)
 {
-    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command"}},
-                                   {"another_alias", {"another_instance", "another_command"}}});
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}},
+                                   {"another_alias", {"another_instance", "another_command", "default"}}});
 
     std::stringstream cerr_stream;
-    EXPECT_EQ(send_command({"unalias", "unexisting_alias"}, trash_stream, cerr_stream),
+    EXPECT_EQ(send_command({"unalias", "nonexistent_alias"}, trash_stream, cerr_stream),
               mp::ReturnCode::CommandLineError);
-    EXPECT_EQ(cerr_stream.str(), "Alias 'unexisting_alias' does not exist\n");
+    EXPECT_EQ(cerr_stream.str(), "Nonexistent alias: nonexistent_alias.\n");
 
     std::stringstream cout_stream;
     send_command({"aliases", "--format=csv"}, cout_stream);
 
-    EXPECT_EQ(cout_stream.str(), "Alias,Instance,Command\nan_alias,an_instance,a_command\nanother_alias,"
-                                 "another_instance,another_command\n");
+    EXPECT_EQ(cout_stream.str(),
+              csv_header +
+                  "an_alias,an_instance,a_command,map\nanother_alias,another_instance,another_command,default\n");
 }
 
-TEST_F(ClientAlias, too_many_unalias_arguments)
+TEST_F(ClientAlias, unaliasDoesNotRemoveNonexistentAliases)
 {
-    std::stringstream cerr_stream;
-    send_command({"unalias", "alias_name", "other_argument"}, trash_stream, cerr_stream);
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "default"}},
+                                   {"another_alias", {"another_instance", "another_command", "map"}}});
 
-    EXPECT_EQ(cerr_stream.str(), "Wrong number of arguments given\n");
+    std::stringstream cerr_stream;
+    EXPECT_EQ(send_command({"unalias", "nonexistent_alias", "another_nonexistent_alias"}, trash_stream, cerr_stream),
+              mp::ReturnCode::CommandLineError);
+    // Since the container for bad aliases is unordered, we cannot expect an ordered output.
+    EXPECT_THAT(cerr_stream.str(), HasSubstr("Nonexistent aliases: "));
+    EXPECT_THAT(cerr_stream.str(), HasSubstr("nonexistent_alias"));
+    EXPECT_THAT(cerr_stream.str(), HasSubstr(", "));
+    EXPECT_THAT(cerr_stream.str(), HasSubstr("another_nonexistent_alias"));
+    EXPECT_THAT(cerr_stream.str(), HasSubstr(".\n"));
+
+    std::stringstream cout_stream;
+    send_command({"aliases", "--format=csv"}, cout_stream);
+
+    EXPECT_EQ(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,default\n"
+                                              "another_alias,another_instance,another_command,map\n");
+}
+
+TEST_F(ClientAlias, unaliasDashDashAllWorks)
+{
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}},
+                                   {"another_alias", {"another_instance", "another_command", "default"}}});
+
+    std::stringstream cerr_stream;
+    EXPECT_EQ(send_command({"unalias", "--all"}, trash_stream, cerr_stream), mp::ReturnCode::Ok);
+    EXPECT_EQ(cerr_stream.str(), "");
+
+    std::stringstream cout_stream;
+    send_command({"aliases", "--format=csv"}, cout_stream);
+
+    EXPECT_EQ(cout_stream.str(), csv_header);
+}
+
+TEST_F(ClientAlias, unaliasDashDashAllClashesWithOtherArguments)
+{
+    populate_db_file(AliasesVector{{"an_alias", {"an_instance", "a_command", "map"}},
+                                   {"another_alias", {"another_instance", "another_command", "default"}}});
+
+    std::stringstream cerr_stream;
+    EXPECT_EQ(send_command({"unalias", "arg", "--all"}, trash_stream, cerr_stream), mp::ReturnCode::CommandLineError);
+    EXPECT_EQ(cerr_stream.str(), "Cannot specify name when --all option set\n");
+
+    std::stringstream cout_stream;
+    send_command({"aliases", "--format=csv"}, cout_stream);
+
+    EXPECT_EQ(cout_stream.str(), csv_header + "an_alias,an_instance,a_command,map\n"
+                                              "another_alias,another_instance,another_command,default\n");
 }
 
 TEST_F(ClientAlias, fails_when_remove_backup_alias_file_fails)
 {
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false)).WillOnce(Return(true)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>()))
+        .WillOnce(Return(false))
+        .WillOnce(Return(true))
+        .WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true)); // mpu::create_temp_file_with_path()
     EXPECT_CALL(*mock_file_ops, open(_, _)).Times(2).WillRepeatedly(Return(true));
     EXPECT_CALL(*mock_file_ops, write(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, remove(_)).WillOnce(Return(false));
 
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::stringstream cerr_stream;
     send_command({"alias", "primary:command", "alias_name"}, trash_stream, cerr_stream);
@@ -2878,13 +3650,16 @@ TEST_F(ClientAlias, fails_renaming_alias_file_fails)
 {
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false)).WillOnce(Return(true)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>()))
+        .WillOnce(Return(false))
+        .WillOnce(Return(true))
+        .WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true)); // mpu::create_temp_file_with_path()
     EXPECT_CALL(*mock_file_ops, open(_, _)).Times(2).WillRepeatedly(Return(true));
     EXPECT_CALL(*mock_file_ops, write(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, rename(_, _)).WillOnce(Return(false));
 
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::stringstream cerr_stream;
     send_command({"alias", "primary:command", "alias_name"}, trash_stream, cerr_stream);
@@ -2896,13 +3671,13 @@ TEST_F(ClientAlias, fails_creating_alias_file_fails)
 {
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false)).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true)); // mpu::create_temp_file_with_path()
     EXPECT_CALL(*mock_file_ops, open(_, _)).Times(2).WillRepeatedly(Return(true));
     EXPECT_CALL(*mock_file_ops, write(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, rename(_, _)).WillOnce(Return(false));
 
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::stringstream cerr_stream;
     send_command({"alias", "primary:command", "alias_name"}, trash_stream, cerr_stream);
@@ -2912,7 +3687,7 @@ TEST_F(ClientAlias, fails_creating_alias_file_fails)
 
 TEST_F(ClientAlias, creating_first_alias_displays_message)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).WillOnce(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
 
     std::stringstream cout_stream;
     EXPECT_EQ(send_command({"alias", "primary:a_command", "an_alias"}, cout_stream), mp::ReturnCode::Ok);
@@ -2922,7 +3697,7 @@ TEST_F(ClientAlias, creating_first_alias_displays_message)
 
 TEST_F(ClientAlias, creating_first_alias_does_not_display_message_if_path_is_set)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).WillOnce(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function());
 
     auto path = qgetenv("PATH");
 #ifdef MULTIPASS_PLATFORM_WINDOWS
@@ -2941,7 +3716,7 @@ TEST_F(ClientAlias, creating_first_alias_does_not_display_message_if_path_is_set
 
 TEST_F(ClientAlias, fails_when_name_clashes_with_command_alias)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::stringstream cerr_stream;
     send_command({"alias", "primary:command", "ls"}, trash_stream, cerr_stream);
@@ -2951,11 +3726,105 @@ TEST_F(ClientAlias, fails_when_name_clashes_with_command_alias)
 
 TEST_F(ClientAlias, fails_when_name_clashes_with_command_name)
 {
-    EXPECT_CALL(mock_daemon, info(_, _, _)).Times(AtMost(1)).WillRepeatedly(info_function);
+    EXPECT_CALL(mock_daemon, info(_, _)).Times(AtMost(1)).WillRepeatedly(make_info_function());
 
     std::stringstream cerr_stream;
     send_command({"alias", "primary:command", "list"}, trash_stream, cerr_stream);
 
     ASSERT_THAT(cerr_stream.str(), Eq("Alias name 'list' clashes with a command name\n"));
 }
+
+TEST_F(ClientAlias, execAliasRewritesMountedDir)
+{
+    std::string alias_name{"an_alias"};
+    std::string instance_name{"primary"};
+    std::string cmd{"pwd"};
+
+    QDir current_dir{QDir::current()};
+    std::string source_dir{(current_dir.canonicalPath()).toStdString()};
+    std::string target_dir{"/home/ubuntu/dir"};
+
+    EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function(source_dir, target_dir));
+
+    populate_db_file(AliasesVector{{alias_name, {instance_name, cmd, "map"}}});
+
+    REPLACE(ssh_channel_request_exec, ([&target_dir, &cmd](ssh_channel, const char* raw_cmd) {
+                EXPECT_THAT(raw_cmd, StartsWith("'cd' '" + target_dir + "/'"));
+                EXPECT_THAT(raw_cmd, HasSubstr("&&"));
+                EXPECT_THAT(raw_cmd, EndsWith("'" + cmd + "'"));
+
+                return SSH_OK;
+            }));
+
+    mp::SSHInfoReply ssh_info_response = make_fake_ssh_info_response(instance_name);
+
+    EXPECT_CALL(mock_daemon, ssh_info(_, _))
+        .WillOnce([&ssh_info_response](grpc::ServerContext* context,
+                                       grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(ssh_info_response);
+
+            return grpc::Status{};
+        });
+
+    EXPECT_EQ(send_command({alias_name}), mp::ReturnCode::Ok);
+}
+
+struct NotDirRewriteTestsuite : public ClientAlias, public WithParamInterface<std::pair<bool, QString>>
+{
+};
+
+TEST_P(NotDirRewriteTestsuite, execAliasDoesNotRewriteMountedDir)
+{
+    auto [map_dir, source_qdir] = GetParam();
+
+    std::string alias_name{"an_alias"};
+    std::string instance_name{"primary"};
+    std::string cmd{"pwd"};
+
+    QDir current_dir{QDir::current()};
+    std::string source_dir{source_qdir.toStdString()};
+    std::string target_dir{"/home/ubuntu/dir"};
+
+    if (map_dir)
+        EXPECT_CALL(mock_daemon, info(_, _)).WillOnce(make_info_function(source_dir, target_dir));
+    else
+        EXPECT_CALL(mock_daemon, info(_, _)).Times(0);
+
+    populate_db_file(AliasesVector{{alias_name, {instance_name, cmd, map_dir ? "map" : "default"}}});
+
+    REPLACE(ssh_channel_request_exec, ([&cmd](ssh_channel, const char* raw_cmd) {
+                EXPECT_THAT(raw_cmd, Not(StartsWith("'cd' '")));
+                EXPECT_THAT(raw_cmd, Not(HasSubstr("&&")));
+                EXPECT_THAT(raw_cmd, EndsWith("'" + cmd + "'"));
+
+                return SSH_OK;
+            }));
+
+    mp::SSHInfoReply ssh_info_response = make_fake_ssh_info_response(instance_name);
+
+    EXPECT_CALL(mock_daemon, ssh_info(_, _))
+        .WillOnce([&ssh_info_response](grpc::ServerContext* context,
+                                       grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(ssh_info_response);
+
+            return grpc::Status{};
+        });
+
+    std::vector<std::string> arguments{alias_name};
+
+    EXPECT_EQ(send_command(arguments), mp::ReturnCode::Ok);
+}
+
+QString current_cdup()
+{
+    QDir cur{QDir::current()};
+    cur.cdUp();
+
+    return cur.canonicalPath();
+}
+
+INSTANTIATE_TEST_SUITE_P(ClientAlias, NotDirRewriteTestsuite,
+                         Values(std::make_pair(false, QDir{QDir::current()}.canonicalPath()),
+                                std::make_pair(true, QDir{QDir::current()}.canonicalPath() + "/0/1/2/3/4/5/6/7/8/9"),
+                                std::make_pair(true, current_cdup() + "/different_name")));
 } // namespace

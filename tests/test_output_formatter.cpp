@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -91,12 +91,12 @@ auto construct_unsorted_list_reply()
     list_entry = list_reply.add_instances();
     list_entry->set_name("trusty-190611-1539");
     list_entry->mutable_instance_status()->set_status(mp::InstanceStatus::SUSPENDED);
-    list_entry->set_current_release("N/A");
+    list_entry->set_current_release("");
 
     list_entry = list_reply.add_instances();
     list_entry->set_name("trusty-190611-1529");
     list_entry->mutable_instance_status()->set_status(mp::InstanceStatus::DELETED);
-    list_entry->set_current_release("N/A");
+    list_entry->set_current_release("");
 
     return list_reply;
 }
@@ -185,6 +185,7 @@ auto construct_single_instance_info_reply()
     gid_map_pair->set_host_id(1000);
     gid_map_pair->set_instance_id(1000);
 
+    info_entry->set_cpu_count("1");
     info_entry->set_load("0.45 0.51 0.15");
     info_entry->set_memory_usage("60817408");
     info_entry->set_memory_total("1503238554");
@@ -224,6 +225,7 @@ auto construct_multiple_instances_info_reply()
     gid_map_pair->set_host_id(1000);
     gid_map_pair->set_instance_id(501);
 
+    info_entry->set_cpu_count("4");
     info_entry->set_load("0.03 0.10 0.15");
     info_entry->set_memory_usage("38797312");
     info_entry->set_memory_total("1610612736");
@@ -441,9 +443,9 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
 
     {&table_formatter, &unsorted_list_reply,
      "Name                    State             IPv4             Image\n"
-     "trusty-190611-1529      Deleted           --               Ubuntu N/A\n"
+     "trusty-190611-1529      Deleted           --               Not Available\n"
      "trusty-190611-1535      Stopped           --               Ubuntu N/A\n"
-     "trusty-190611-1539      Suspended         --               Ubuntu N/A\n"
+     "trusty-190611-1539      Suspended         --               Not Available\n"
      "trusty-190611-1542      Running           --               Ubuntu N/A\n",
      "table_list_unsorted"},
 
@@ -457,9 +459,10 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
      "                fd52:2ccf:f758:0:a342:79b5:e2ba:e05e\n"
      "Release:        Ubuntu 16.04.3 LTS\n"
      "Image hash:     1797c5c82016 (Ubuntu 16.04 LTS)\n"
+     "CPU(s):         1\n"
      "Load:           0.45 0.51 0.15\n"
-     "Disk usage:     1.2G out of 4.8G\n"
-     "Memory usage:   58.0M out of 1.4G\n"
+     "Disk usage:     1.2GiB out of 4.8GiB\n"
+     "Memory usage:   58.0MiB out of 1.4GiB\n"
      "Mounts:         /home/user/foo      => foo\n"
      "                    UID map: 1000:1000\n"
      "                    GID map: 1000:1000\n"
@@ -473,9 +476,10 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
      "IPv4:           10.21.124.56\n"
      "Release:        Ubuntu 16.04.3 LTS\n"
      "Image hash:     1797c5c82016 (Ubuntu 16.04 LTS)\n"
+     "CPU(s):         4\n"
      "Load:           0.03 0.10 0.15\n"
-     "Disk usage:     1.8G out of 6.3G\n"
-     "Memory usage:   37.0M out of 1.5G\n"
+     "Disk usage:     1.8GiB out of 6.3GiB\n"
+     "Memory usage:   37.0MiB out of 1.5GiB\n"
      "Mounts:         /home/user/source => source\n"
      "                    UID map: 1000:501\n"
      "                    GID map: 1000:501\n\n"
@@ -484,6 +488,7 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
      "IPv4:           --\n"
      "Release:        --\n"
      "Image hash:     ab5191cc1725 (Ubuntu 18.04 LTS)\n"
+     "CPU(s):         --\n"
      "Load:           --\n"
      "Disk usage:     --\n"
      "Memory usage:   --\n"
@@ -493,39 +498,39 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
     {&csv_formatter, &empty_list_reply, "Name,State,IPv4,IPv6,Release,AllIPv4\n", "csv_list_empty"},
     {&csv_formatter, &single_instance_list_reply,
      "Name,State,IPv4,IPv6,Release,AllIPv4\n"
-     "foo,Running,10.168.32.2,fdde:2681:7a2::4ca,16.04 LTS,\"10.168.32.2,200.3.123.30\"\n",
+     "foo,Running,10.168.32.2,fdde:2681:7a2::4ca,Ubuntu 16.04 LTS,\"10.168.32.2,200.3.123.30\"\n",
      "csv_list_single"},
     {&csv_formatter, &multiple_instances_list_reply,
      "Name,State,IPv4,IPv6,Release,AllIPv4\n"
-     "bogus-instance,Running,10.21.124.56,,16.04 LTS,\"10.21.124.56\"\n"
-     "bombastic,Stopped,,,18.04 LTS,\"\"\n",
+     "bogus-instance,Running,10.21.124.56,,Ubuntu 16.04 LTS,\"10.21.124.56\"\n"
+     "bombastic,Stopped,,,Ubuntu 18.04 LTS,\"\"\n",
      "csv_list_multiple"},
     {&csv_formatter, &unsorted_list_reply,
      "Name,State,IPv4,IPv6,Release,AllIPv4\n"
-     "trusty-190611-1529,Deleted,,,N/A,\"\"\n"
-     "trusty-190611-1535,Stopped,,,N/A,\"\"\n"
-     "trusty-190611-1539,Suspended,,,N/A,\"\"\n"
-     "trusty-190611-1542,Running,,,N/A,\"\"\n",
+     "trusty-190611-1529,Deleted,,,Not Available,\"\"\n"
+     "trusty-190611-1535,Stopped,,,Ubuntu N/A,\"\"\n"
+     "trusty-190611-1539,Suspended,,,Not Available,\"\"\n"
+     "trusty-190611-1542,Running,,,Ubuntu N/A,\"\"\n",
      "csv_list_unsorted"},
 
     {&csv_formatter, &empty_info_reply,
      "Name,State,Ipv4,Ipv6,Release,Image hash,Image release,Load,Disk usage,Disk total,Memory "
-     "usage,Memory total,Mounts,AllIPv4\n",
+     "usage,Memory total,Mounts,AllIPv4,CPU(s)\n",
      "csv_info_empty"},
     {&csv_formatter, &single_instance_info_reply,
      "Name,State,Ipv4,Ipv6,Release,Image hash,Image release,Load,Disk usage,Disk total,Memory "
-     "usage,Memory total,Mounts,AllIPv4\nfoo,Running,10.168.32.2,2001:67c:1562:8007::aac:423a,Ubuntu 16.04.3 "
+     "usage,Memory total,Mounts,AllIPv4,CPU(s)\nfoo,Running,10.168.32.2,2001:67c:1562:8007::aac:423a,Ubuntu 16.04.3 "
      "LTS,1797c5c82016c1e65f4008fcf89deae3a044ef76087a9ec5b907c6d64a3609ac,16.04 LTS,0.45 0.51 "
      "0.15,1288490188,5153960756,60817408,1503238554,/home/user/foo => foo;/home/user/test_dir "
-     "=> test_dir;,\"10.168.32.2,200.3.123.29\"\n",
+     "=> test_dir;,\"10.168.32.2,200.3.123.29\";,1\n",
      "csv_info_single"},
     {&csv_formatter, &multiple_instances_info_reply,
      "Name,State,Ipv4,Ipv6,Release,Image hash,Image release,Load,Disk usage,Disk total,Memory "
-     "usage,Memory total,Mounts,AllIPv4\nbogus-instance,Running,10.21.124.56,,Ubuntu 16.04.3 "
+     "usage,Memory total,Mounts,AllIPv4,CPU(s)\nbogus-instance,Running,10.21.124.56,,Ubuntu 16.04.3 "
      "LTS,1797c5c82016c1e65f4008fcf89deae3a044ef76087a9ec5b907c6d64a3609ac,16.04 LTS,0.03 0.10 "
      "0.15,1932735284,6764573492,38797312,1610612736,/home/user/source => "
-     "source;,\"10.21.124.56\"\nbombastic,Stopped,,,,"
-     "ab5191cc172564e7cc0eafd397312a32598823e645279c820f0935393aead509,18.04 LTS,,,,,,,\"\"\n",
+     "source;,\"10.21.124.56\";,4\nbombastic,Stopped,,,,"
+     "ab5191cc172564e7cc0eafd397312a32598823e645279c820f0935393aead509,18.04 LTS,,,,,,,\"\";,\n",
      "csv_info_multiple"},
 
     {&yaml_formatter, &empty_list_reply, "\n", "yaml_list_empty"},
@@ -535,41 +540,41 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
      "    ipv4:\n"
      "      - 10.168.32.2\n"
      "      - 200.3.123.30\n"
-     "    release: 16.04 LTS\n",
+     "    release: Ubuntu 16.04 LTS\n",
      "yaml_list_single"},
     {&yaml_formatter, &multiple_instances_list_reply,
      "bogus-instance:\n"
      "  - state: Running\n"
      "    ipv4:\n"
      "      - 10.21.124.56\n"
-     "    release: 16.04 LTS\n"
+     "    release: Ubuntu 16.04 LTS\n"
      "bombastic:\n"
      "  - state: Stopped\n"
      "    ipv4:\n"
      "      []\n"
-     "    release: 18.04 LTS\n",
+     "    release: Ubuntu 18.04 LTS\n",
      "yaml_list_multiple"},
     {&yaml_formatter, &unsorted_list_reply,
      "trusty-190611-1529:\n"
      "  - state: Deleted\n"
      "    ipv4:\n"
      "      []\n"
-     "    release: N/A\n"
+     "    release: Not Available\n"
      "trusty-190611-1535:\n"
      "  - state: Stopped\n"
      "    ipv4:\n"
      "      []\n"
-     "    release: N/A\n"
+     "    release: Ubuntu N/A\n"
      "trusty-190611-1539:\n"
      "  - state: Suspended\n"
      "    ipv4:\n"
      "      []\n"
-     "    release: N/A\n"
+     "    release: Not Available\n"
      "trusty-190611-1542:\n"
      "  - state: Running\n"
      "    ipv4:\n"
      "      []\n"
-     "    release: N/A\n",
+     "    release: Ubuntu N/A\n",
      "yaml_list_unsorted"},
     {&yaml_formatter, &empty_info_reply, "errors:\n  - ~\n", "yaml_info_empty"},
 
@@ -581,6 +586,7 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
      "    image_hash: 1797c5c82016c1e65f4008fcf89deae3a044ef76087a9ec5b907c6d64a3609ac\n"
      "    image_release: 16.04 LTS\n"
      "    release: Ubuntu 16.04.3 LTS\n"
+     "    cpu_count: 1\n"
      "    load:\n"
      "      - 0.45\n"
      "      - 0.51\n"
@@ -617,6 +623,7 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
      "    image_hash: 1797c5c82016c1e65f4008fcf89deae3a044ef76087a9ec5b907c6d64a3609ac\n"
      "    image_release: 16.04 LTS\n"
      "    release: Ubuntu 16.04.3 LTS\n"
+     "    cpu_count: 4\n"
      "    load:\n"
      "      - 0.03\n"
      "      - 0.10\n"
@@ -642,6 +649,7 @@ const std::vector<FormatterParamType> orderable_list_info_formatter_outputs{
      "    image_hash: ab5191cc172564e7cc0eafd397312a32598823e645279c820f0935393aead509\n"
      "    image_release: 18.04 LTS\n"
      "    release: ~\n"
+     "    cpu_count: ~\n"
      "    disks:\n"
      "      - sda1:\n"
      "          used: ~\n"
@@ -670,7 +678,7 @@ const std::vector<FormatterParamType> non_orderable_list_info_formatter_outputs{
      "                \"200.3.123.30\"\n"
      "            ],\n"
      "            \"name\": \"foo\",\n"
-     "            \"release\": \"16.04 LTS\",\n"
+     "            \"release\": \"Ubuntu 16.04 LTS\",\n"
      "            \"state\": \"Running\"\n"
      "        }\n"
      "    ]\n"
@@ -684,14 +692,14 @@ const std::vector<FormatterParamType> non_orderable_list_info_formatter_outputs{
      "                \"10.21.124.56\"\n"
      "            ],\n"
      "            \"name\": \"bogus-instance\",\n"
-     "            \"release\": \"16.04 LTS\",\n"
+     "            \"release\": \"Ubuntu 16.04 LTS\",\n"
      "            \"state\": \"Running\"\n"
      "        },\n"
      "        {\n"
      "            \"ipv4\": [\n"
      "            ],\n"
      "            \"name\": \"bombastic\",\n"
-     "            \"release\": \"18.04 LTS\",\n"
+     "            \"release\": \"Ubuntu 18.04 LTS\",\n"
      "            \"state\": \"Stopped\"\n"
      "        }\n"
      "    ]\n"
@@ -711,6 +719,7 @@ const std::vector<FormatterParamType> non_orderable_list_info_formatter_outputs{
      "    ],\n"
      "    \"info\": {\n"
      "        \"foo\": {\n"
+     "            \"cpu_count\": \"1\",\n"
      "            \"disks\": {\n"
      "                \"sda1\": {\n"
      "                    \"total\": \"5153960756\",\n"
@@ -764,6 +773,7 @@ const std::vector<FormatterParamType> non_orderable_list_info_formatter_outputs{
      "    ],\n"
      "    \"info\": {\n"
      "        \"bogus-instance\": {\n"
+     "            \"cpu_count\": \"4\",\n"
      "            \"disks\": {\n"
      "                \"sda1\": {\n"
      "                    \"total\": \"6764573492\",\n"
@@ -799,6 +809,7 @@ const std::vector<FormatterParamType> non_orderable_list_info_formatter_outputs{
      "            \"state\": \"Running\"\n"
      "        },\n"
      "        \"bombastic\": {\n"
+     "            \"cpu_count\": \"\",\n"
      "            \"disks\": {\n"
      "                \"sda1\": {\n"
      "                }\n"

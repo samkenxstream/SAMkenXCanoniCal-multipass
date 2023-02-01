@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -110,7 +110,7 @@ TEST_F(DNSMasqServer, finds_ip)
     auto ip = dns.get_ip_for(hw_addr);
 
     ASSERT_TRUE(ip);
-    EXPECT_THAT(ip.value(), Eq(mp::IPAddress(expected_ip)));
+    EXPECT_EQ(ip.value(), mp::IPAddress(expected_ip));
 }
 
 TEST_F(DNSMasqServer, returns_null_ip_when_leases_file_does_not_exist)

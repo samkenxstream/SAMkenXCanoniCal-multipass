@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,6 +45,7 @@ QString mp::QemuImgProcessSpec::apparmor_profile() const
 profile %1 flags=(attach_disconnected) {
   #include <abstractions/base>
 
+  capability dac_read_search,
   %2
 
   # binary and its libs
@@ -75,9 +76,8 @@ profile %1 flags=(attach_disconnected) {
     }
     catch (mp::SnapEnvironmentException&)
     {
-        extra_capabilities =
-            "capability dac_read_search,\n    capability dac_override,"; // FIXME - unclear why this is required when
-                                                                         // not snap confined
+        extra_capabilities = "capability dac_override,"; // FIXME - unclear why this is required when
+                                                         // not snap confined
         signal_peer = "unconfined";
     }
 

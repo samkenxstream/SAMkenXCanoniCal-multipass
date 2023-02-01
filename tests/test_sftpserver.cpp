@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,10 +27,11 @@
 #include "temp_dir.h"
 #include "temp_file.h"
 
+#include <src/sshfs_mount/sftp_server.h>
+
 #include <multipass/format.h>
 #include <multipass/platform.h>
 #include <multipass/ssh/ssh_session.h>
-#include <multipass/sshfs_mount/sftp_server.h>
 
 #include <queue>
 
@@ -389,7 +390,7 @@ TEST_F(SftpServer, opendir_not_readable_fails)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, isReadable(_)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, isReadable(A<const QDir&>())).WillOnce(Return(false));
 
     auto sftp = make_sftpserver(mpt::test_data_path().toStdString());
     auto msg = make_msg(SFTP_OPENDIR);

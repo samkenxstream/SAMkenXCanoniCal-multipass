@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -124,7 +124,7 @@ bool is_ethernet(const QDir& net_dir)
            get_net_devtype(net_dir).isEmpty();
 }
 
-mp::optional<mp::NetworkInterfaceInfo> get_network(const QDir& net_dir)
+std::optional<mp::NetworkInterfaceInfo> get_network(const QDir& net_dir)
 {
     static const auto bridge_fname = QStringLiteral("brif");
     auto id = net_dir.dirName().toStdString();
@@ -143,7 +143,7 @@ mp::optional<mp::NetworkInterfaceInfo> get_network(const QDir& net_dir)
     else if (is_ethernet(net_dir))
         return {{std::move(id), "ethernet", "Ethernet device"}};
 
-    return mp::nullopt;
+    return std::nullopt;
 }
 
 void update_bridges(std::map<std::string, mp::NetworkInterfaceInfo>& networks)
@@ -244,7 +244,7 @@ std::map<std::string, mp::NetworkInterfaceInfo> mp::platform::Platform::get_netw
     return detail::get_network_interfaces_from(sysfs);
 }
 
-QString mp::platform::Platform::get_workflows_url_override() const
+QString mp::platform::Platform::get_blueprints_url_override() const
 {
     return QString::fromUtf8(qgetenv("MULTIPASS_BLUEPRINTS_URL"));
 }

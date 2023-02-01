@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -306,7 +306,7 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
     else
     {
         std::string id;
-        optional<VMImage> source_image{nullopt};
+        std::optional<VMImage> source_image{std::nullopt};
         QFuture<VMImage> future;
 
         if (query.query_type == Query::Type::HttpDownload)
@@ -355,10 +355,9 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
                 // Attempt to make a sane directory name based on the filename of the image
 
                 const auto image_dir_name =
-                    QString("%1-%2")
-                        .arg(image_filename.section(".", 0, image_filename.endsWith(".xz") ? -3 : -2))
-                        .arg(last_modified.toString("yyyyMMdd"));
-                const auto image_dir = mp::utils::make_dir(images_dir, image_dir_name);
+                    QString("%1-%2").arg(image_filename.section(".", 0, image_filename.endsWith(".xz") ? -3 : -2),
+                                         QLocale::c().toString(last_modified, "yyyyMMdd"));
+                const auto image_dir = MP_UTILS.make_dir(images_dir, image_dir_name);
 
                 // Had to use std::bind here to workaround the 5 allowable function arguments constraint of
                 // QtConcurrent::run()
@@ -411,7 +410,7 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
             else
             {
                 const auto image_dir =
-                    mp::utils::make_dir(images_dir, QString("%1-%2").arg(info.release).arg(info.version));
+                    MP_UTILS.make_dir(images_dir, QString("%1-%2").arg(info.release).arg(info.version));
 
                 // Had to use std::bind here to workaround the 5 allowable function arguments constraint of
                 // QtConcurrent::run()
@@ -569,7 +568,7 @@ mp::MemorySize mp::DefaultVMImageVault::minimum_image_size_for(const std::string
 }
 
 mp::VMImage mp::DefaultVMImageVault::download_and_prepare_source_image(
-    const VMImageInfo& info, mp::optional<VMImage>& existing_source_image, const QDir& image_dir,
+    const VMImageInfo& info, std::optional<VMImage>& existing_source_image, const QDir& image_dir,
     const FetchType& fetch_type, const PrepareAction& prepare, const ProgressMonitor& monitor)
 {
     VMImage source_image;
@@ -634,7 +633,7 @@ QString mp::DefaultVMImageVault::extract_image_from(const std::string& instance_
                                                     const ProgressMonitor& monitor)
 {
     const auto name = QString::fromStdString(instance_name);
-    const QDir output_dir{mp::utils::make_dir(instances_dir, name)};
+    const QDir output_dir{MP_UTILS.make_dir(instances_dir, name)};
     QFileInfo file_info{source_image.image_path};
     const auto image_name = file_info.fileName().remove(".xz");
     const auto image_path = output_dir.filePath(image_name);
@@ -646,7 +645,7 @@ mp::VMImage mp::DefaultVMImageVault::image_instance_from(const std::string& inst
                                                          const VMImage& prepared_image)
 {
     auto name = QString::fromStdString(instance_name);
-    auto output_dir = mp::utils::make_dir(instances_dir, name);
+    auto output_dir = MP_UTILS.make_dir(instances_dir, name);
 
     return {mp::vault::copy(prepared_image.image_path, output_dir),
             mp::vault::copy(prepared_image.kernel_path, output_dir),
@@ -673,7 +672,7 @@ mp::VMImage mp::DefaultVMImageVault::fetch_kernel_and_initrd(const VMImageInfo& 
     return image;
 }
 
-mp::optional<QFuture<mp::VMImage>> mp::DefaultVMImageVault::get_image_future(const std::string& id)
+std::optional<QFuture<mp::VMImage>> mp::DefaultVMImageVault::get_image_future(const std::string& id)
 {
     auto it = in_progress_image_fetches.find(id);
     if (it != in_progress_image_fetches.end())
@@ -681,7 +680,7 @@ mp::optional<QFuture<mp::VMImage>> mp::DefaultVMImageVault::get_image_future(con
         return it->second;
     }
 
-    return mp::nullopt;
+    return std::nullopt;
 }
 
 mp::VMImage mp::DefaultVMImageVault::finalize_image_records(const Query& query, const VMImage& prepared_image,

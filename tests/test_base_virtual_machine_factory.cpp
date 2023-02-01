@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,6 +17,7 @@
 
 #include "common.h"
 #include "mock_logger.h"
+#include "stub_ssh_key_provider.h"
 #include "stub_url_downloader.h"
 #include "temp_dir.h"
 

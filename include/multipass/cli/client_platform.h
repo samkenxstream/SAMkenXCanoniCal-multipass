@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,17 +18,34 @@
 #ifndef MULTIPASS_CLIENT_PLATFORM_H
 #define MULTIPASS_CLIENT_PLATFORM_H
 
+#include <multipass/singleton.h>
+
 #include <QString>
+
+#include <string>
+#include <utility>
+
+#define MP_CLIENT_PLATFORM multipass::cli::platform::Platform::instance()
 
 namespace multipass
 {
 const auto default_id = -1;
 const auto no_id_info_available = -2;
 
+class Terminal;
+
 namespace cli
 {
 namespace platform
 {
+class Platform : public Singleton<Platform>
+{
+public:
+    Platform(const Singleton::PrivatePass&) noexcept;
+
+    virtual std::pair<std::string, std::string> get_user_password(Terminal* term) const;
+};
+
 void parse_transfer_entry(const QString& entry, QString& path, QString& instance_name);
 int getuid();
 int getgid();
@@ -37,4 +54,9 @@ QStringList gui_tray_notification_strings();
 }
 }
 }
+
+inline multipass::cli::platform::Platform::Platform(const PrivatePass& pass) noexcept : Singleton(pass)
+{
+}
+
 #endif // MULTIPASS_CLIENT_PLATFORM_H

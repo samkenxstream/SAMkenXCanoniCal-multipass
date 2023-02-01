@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,8 @@
 
 #include <multipass/cli/alias_dict.h>
 #include <multipass/cli/command.h>
+
+#include <unordered_set>
 
 #include <QString>
 
@@ -45,7 +47,7 @@ private:
     ParseCode parse_args(ArgParser* parser);
 
     AliasDict aliases;
-    std::string alias_to_remove;
+    std::unordered_set<std::string> aliases_to_remove;
 };
 } // namespace cmd
 } // namespace multipass

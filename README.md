@@ -29,6 +29,7 @@ For macOS, you can download the installers [from GitHub](https://github.com/cano
 
 ```
 # Note, this may require you to enter your password for some sudo operations during install
+# Mac OS users may need to disable their firewall to launch a multipass instance successfully
 brew install --cask multipass
 ```
 
@@ -73,6 +74,7 @@ State:          RUNNING
 IPv4:           10.125.174.247
 Release:        Ubuntu 18.04.1 LTS
 Image hash:     19e9853d8267 (Ubuntu 18.04 LTS)
+CPU(s):         1
 Load:           0.97 0.30 0.10
 Disk usage:     1.1G out of 4.7G
 Memory usage:   85.1M out of 985.4M

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,7 +40,7 @@ constexpr auto category = "ssh process";
 class ExitStatusCallback
 {
 public:
-    ExitStatusCallback(ssh_channel channel, mp::optional<int>& exit_status) : channel{channel}
+    ExitStatusCallback(ssh_channel channel, std::optional<int>& exit_status) : channel{channel}
     {
         ssh_callbacks_init(&cb);
         cb.channel_exit_status_function = channel_exit_status_cb;
@@ -55,7 +55,7 @@ public:
 private:
     static void channel_exit_status_cb(ssh_session, ssh_channel, int exit_status, void* userdata)
     {
-        auto exit_code = reinterpret_cast<mp::optional<int>*>(userdata);
+        auto exit_code = reinterpret_cast<std::optional<int>*>(userdata);
         *exit_code = exit_status;
     }
     ssh_channel channel;
@@ -82,7 +82,7 @@ mp::SSHProcess::SSHProcess(ssh_session session, const std::string& cmd)
 
 int mp::SSHProcess::exit_code(std::chrono::milliseconds timeout)
 {
-    exit_status = nullopt;
+    exit_status = std::nullopt;
     ExitStatusCallback cb{channel.get(), exit_status};
 
     std::unique_ptr<ssh_event_struct, decltype(ssh_event_free)*> event{ssh_event_new(), ssh_event_free};

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -72,6 +72,22 @@ const QMap<QString, QMap<QString, CustomImageInfo>> multipass_image_info{
         "core-18",
         "Core 18",
         "",
+        ""}},
+      {{"ubuntu-core-20-amd64.img.xz"},
+       {"https://cdimage.ubuntu.com/ubuntu-core/20/stable/current/",
+        {"core20"},
+        "Ubuntu",
+        "core-20",
+        "Core 20",
+        "",
+        ""}},
+      {{"ubuntu-core-22-amd64.img.xz"},
+       {"https://cdimage.ubuntu.com/ubuntu-core/22/stable/current/",
+        {"core22"},
+        "Ubuntu",
+        "core-22",
+        "Core 22",
+        "",
         ""}}}}};
 
 const QMap<QString, QMap<QString, CustomImageInfo>> snapcraft_image_info{
@@ -120,7 +136,7 @@ const QMap<QString, QMap<QString, CustomImageInfo>> snapcraft_image_info{
 auto base_image_info_for(mp::URLDownloader* url_downloader, const QString& image_url, const QString& hash_url,
                          const QString& image_file)
 {
-    const auto last_modified = url_downloader->last_modified({image_url}).toString("yyyyMMdd");
+    const auto last_modified = QLocale::c().toString(url_downloader->last_modified({image_url}), "yyyyMMdd");
     const auto sha256_sums = url_downloader->download({hash_url}).split('\n');
     QString hash;
 
@@ -196,7 +212,7 @@ mp::CustomVMImageHost::CustomVMImageHost(const QString& arch, URLDownloader* dow
 {
 }
 
-mp::optional<mp::VMImageInfo> mp::CustomVMImageHost::info_for(const Query& query)
+std::optional<mp::VMImageInfo> mp::CustomVMImageHost::info_for(const Query& query)
 {
     check_alias_is_supported(query.release, query.remote_name);
 
@@ -205,7 +221,7 @@ mp::optional<mp::VMImageInfo> mp::CustomVMImageHost::info_for(const Query& query
     auto it = custom_manifest->image_records.find(query.release);
 
     if (it == custom_manifest->image_records.end())
-        return nullopt;
+        return std::nullopt;
 
     return *it->second;
 }
@@ -215,7 +231,7 @@ std::vector<std::pair<std::string, mp::VMImageInfo>> mp::CustomVMImageHost::all_
     std::vector<std::pair<std::string, mp::VMImageInfo>> images;
 
     auto image = info_for(query);
-    if (image != nullopt)
+    if (image != std::nullopt)
         images.push_back(std::make_pair(query.remote_name, *image));
 
     return images;

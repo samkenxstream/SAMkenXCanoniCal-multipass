@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,12 +20,12 @@
 
 #include "disabled_copy_move.h"
 #include "ip_address.h"
-#include "optional.h"
 
 #include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,6 +33,8 @@ namespace multipass
 {
 class MemorySize;
 class SSHKeyProvider;
+struct VMMount;
+class MountHandler;
 
 class VirtualMachine : private DisabledCopyMove
 {
@@ -75,12 +77,15 @@ public:
     virtual void update_cpus(int num_cores) = 0;
     virtual void resize_memory(const MemorySize& new_size) = 0;
     virtual void resize_disk(const MemorySize& new_size) = 0;
+    virtual std::unique_ptr<MountHandler> make_native_mount_handler(const SSHKeyProvider* ssh_key_provider,
+                                                                    const std::string& target,
+                                                                    const VMMount& mount) = 0;
 
     VirtualMachine::State state;
     const std::string vm_name;
     std::condition_variable state_wait;
     std::mutex state_mutex;
-    optional<IPAddress> management_ip;
+    std::optional<IPAddress> management_ip;
     bool shutdown_while_starting{false};
 
 protected:

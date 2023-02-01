@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,7 +36,7 @@ constexpr auto logging_category = "libvirt factory";
 
 auto generate_libvirt_bridge_xml_config(const mp::Path& data_dir, const std::string& bridge_name)
 {
-    auto network_dir = mp::utils::make_dir(QDir(data_dir), "network");
+    auto network_dir = MP_UTILS.make_dir(QDir(data_dir), "network");
     auto subnet = MP_BACKEND.get_subnet(network_dir, QString::fromStdString(bridge_name));
 
     return fmt::format("<network>\n"

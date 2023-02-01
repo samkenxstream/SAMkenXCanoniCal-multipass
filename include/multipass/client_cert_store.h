@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 #include <multipass/cert_store.h>
 #include <multipass/path.h>
 
+#include <QDir>
 #include <QList>
 #include <QSslCertificate>
 
@@ -38,7 +39,7 @@ public:
 private:
     bool verify_cert(const QSslCertificate& cert);
 
-    Path cert_dir;
+    QDir cert_dir;
     QList<QSslCertificate> authenticated_client_certs;
 };
 } // namespace multipass

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,8 @@
 #include "temp_dir.h"
 
 #include <multipass/network_interface.h>
-#include <multipass/optional.h>
+
+#include <src/daemon/vm_specs.h>
 
 #include <string>
 #include <vector>
@@ -31,7 +32,7 @@
 namespace mp = multipass;
 namespace mpt = multipass::test;
 
-std::string make_instance_json(const mp::optional<std::string>& default_mac = mp::nullopt,
+std::string make_instance_json(const std::optional<std::string>& default_mac = std::nullopt,
                                const std::vector<mp::NetworkInterface>& extra_ifaces = {},
                                const std::vector<std::string>& extra_instances = {});
 
@@ -39,5 +40,7 @@ std::unique_ptr<mpt::TempDir> plant_instance_json(const std::string& contents); 
 
 void check_interfaces_in_json(const QString& file, const std::string& mac,
                               const std::vector<mp::NetworkInterface>& extra_interfaces);
+
+void check_mounts_in_json(const QString& file, std::unordered_map<std::string, mp::VMMount>& mounts);
 
 #endif // MULTIPASS_JSON_UTILS_H

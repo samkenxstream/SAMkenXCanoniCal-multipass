@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,7 +37,7 @@ public:
     explicit QemuPlatformDetail(const Path& data_dir);
     virtual ~QemuPlatformDetail();
 
-    optional<IPAddress> get_ip_for(const std::string& hw_addr) override;
+    std::optional<IPAddress> get_ip_for(const std::string& hw_addr) override;
     void remove_resources_for(const std::string& name) override;
     void platform_health_check() override;
     QStringList vm_platform_args(const VirtualMachineDescription& vm_desc) override;

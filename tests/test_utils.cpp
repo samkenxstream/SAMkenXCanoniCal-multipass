@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -303,7 +303,7 @@ TEST(Utils, make_file_with_content_fails_if_path_cannot_be_created)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(false));
 
     MP_EXPECT_THROW_THAT(MP_UTILS.make_file_with_content(file_name, file_contents), std::runtime_error,
@@ -316,7 +316,7 @@ TEST(Utils, make_file_with_content_fails_if_file_cannot_be_created)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(false));
 
@@ -330,7 +330,7 @@ TEST(Utils, make_file_with_content_throws_on_write_error)
 
     auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
 
-    EXPECT_CALL(*mock_file_ops, exists(_)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, write(_, _, _)).WillOnce(Return(747));
@@ -353,6 +353,13 @@ TEST(Utils, generateScryptHashErrorThrows)
 
     MP_EXPECT_THROW_THAT(MP_UTILS.generate_scrypt_hash_for("passphrase"), std::runtime_error,
                          mpt::match_what(StrEq("Cannot generate passphrase hash")));
+}
+
+TEST(Utils, to_cmd_returns_empty_string_on_empty_input)
+{
+    std::vector<std::string> args{};
+    auto output = mp::utils::to_cmd(args, mp::utils::QuoteType::quote_every_arg);
+    EXPECT_THAT(output, ::testing::StrEq(""));
 }
 
 TEST(Utils, to_cmd_output_has_no_quotes)
@@ -653,7 +660,7 @@ TEST(Utils, make_dir_creates_correct_dir)
     mpt::TempDir temp_dir;
     QString new_dir{"foo"};
 
-    auto new_path = mp::utils::make_dir(QDir(temp_dir.path()), new_dir);
+    auto new_path = MP_UTILS.make_dir(QDir(temp_dir.path()), new_dir);
 
     EXPECT_TRUE(QFile::exists(new_path));
     EXPECT_EQ(new_path, temp_dir.path() + "/" + new_dir);
@@ -663,7 +670,7 @@ TEST(Utils, make_dir_with_no_new_dir)
 {
     mpt::TempDir temp_dir;
 
-    auto new_path = mp::utils::make_dir(QDir(temp_dir.path()), "");
+    auto new_path = MP_UTILS.make_dir(QDir(temp_dir.path()), "");
 
     EXPECT_TRUE(QFile::exists(new_path));
     EXPECT_EQ(new_path, temp_dir.path());

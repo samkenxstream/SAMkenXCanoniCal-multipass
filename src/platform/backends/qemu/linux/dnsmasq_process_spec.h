@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,6 @@
 #define MULTIPASS_DNSMASQ_PROCESS_SPEC_H
 
 #include <multipass/ip_address.h>
-#include <multipass/optional.h>
 #include <multipass/path.h>
 #include <multipass/process/process_spec.h>
 

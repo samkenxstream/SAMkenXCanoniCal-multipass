@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,6 @@
 #include "common.h"
 #include "process_factory.h" // rely on build system to include the right implementation
 
-#include <multipass/optional.h>
 #include <multipass/process/process.h>
 
 #include <functional>
@@ -68,7 +67,7 @@ private:
     static MockProcessFactory& mock_instance();
     void register_callback(const Callback& callback);
     std::vector<ProcessInfo> process_list;
-    multipass::optional<Callback> callback;
+    std::optional<Callback> callback;
 };
 
 class MockProcess : public Process

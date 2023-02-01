@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,6 +28,7 @@
 #include <QString>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace multipass
@@ -35,11 +36,12 @@ namespace multipass
 
 struct SimpleStreamsManifest
 {
-    static std::unique_ptr<SimpleStreamsManifest> fromJson(const QByteArray& json, const QString& host_url);
+    static std::unique_ptr<SimpleStreamsManifest>
+    fromJson(const QByteArray& json, const std::optional<QByteArray>& json_from_mirror, const QString& host_url);
 
     const QString updated_at;
     const std::vector<VMImageInfo> products;
     const QMap<QString, const VMImageInfo*> image_records;
 };
-}
+} // namespace multipass
 #endif // MULTIPASS_SIMPLE_STREAMS_MANIFEST_H

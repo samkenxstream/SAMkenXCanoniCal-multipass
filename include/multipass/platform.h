@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
 #ifndef MULTIPASS_PLATFORM_H
 #define MULTIPASS_PLATFORM_H
 
-#include <multipass/cli/alias_definition.h>
+#include <multipass/alias_definition.h>
 #include <multipass/days.h>
 #include <multipass/logging/logger.h>
 #include <multipass/network_interface_info.h>
@@ -53,12 +53,13 @@ public:
     Platform(const Singleton::PrivatePass&) noexcept;
     // Get information on the network interfaces that are seen by the platform, indexed by name
     virtual std::map<std::string, NetworkInterfaceInfo> get_network_interfaces_info() const;
-    virtual QString get_workflows_url_override() const;
+    virtual QString get_blueprints_url_override() const;
     virtual bool is_alias_supported(const std::string& alias, const std::string& remote) const;
     virtual bool is_remote_supported(const std::string& remote) const;
     virtual bool is_backend_supported(const QString& backend) const; // temporary (?)
     virtual int chown(const char* path, unsigned int uid, unsigned int gid) const;
     virtual int chmod(const char* path, unsigned int mode) const;
+    virtual bool set_permissions(const multipass::Path path, const QFileDevice::Permissions permissions) const;
     virtual bool link(const char* target, const char* link) const;
     virtual bool symlink(const char* target, const char* link, bool is_dir) const;
     virtual int utime(const char* path, int atime, int mtime) const;

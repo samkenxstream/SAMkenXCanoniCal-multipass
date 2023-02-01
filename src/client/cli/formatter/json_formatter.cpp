@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,6 +41,7 @@ std::string mp::JsonFormatter::format(const InfoReply& reply) const
         instance_info.insert("image_hash", QString::fromStdString(info.id()));
         instance_info.insert("image_release", QString::fromStdString(info.image_release()));
         instance_info.insert("release", QString::fromStdString(info.current_release()));
+        instance_info.insert("cpu_count", QString::fromStdString(info.cpu_count()));
 
         QJsonArray load;
         if (!info.load().empty())
@@ -136,7 +137,10 @@ std::string mp::JsonFormatter::format(const ListReply& reply) const
             ipv4_addrs.append(QString::fromStdString(ip));
         instance_obj.insert("ipv4", ipv4_addrs);
 
-        instance_obj.insert("release", QString::fromStdString(instance.current_release()));
+        instance_obj.insert("release",
+                            QString::fromStdString(instance.current_release().empty()
+                                                       ? "Not Available"
+                                                       : fmt::format("Ubuntu {}", instance.current_release())));
 
         instances.append(instance_obj);
     }
@@ -237,6 +241,7 @@ std::string mp::JsonFormatter::format(const mp::AliasDict& aliases) const
         alias_obj.insert("alias", QString::fromStdString(alias));
         alias_obj.insert("instance", QString::fromStdString(def.instance));
         alias_obj.insert("command", QString::fromStdString(def.command));
+        alias_obj.insert("working-directory", QString::fromStdString(def.working_directory));
 
         aliases_array.append(alias_obj);
     }

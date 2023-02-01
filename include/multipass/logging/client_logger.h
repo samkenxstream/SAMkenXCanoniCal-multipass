@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,11 +29,11 @@ namespace multipass
 {
 namespace logging
 {
-template <typename T>
+template <typename T, typename U>
 class ClientLogger : public Logger
 {
 public:
-    ClientLogger(Level level, MultiplexingLogger& mpx, grpc::ServerWriterInterface<T>* server)
+    ClientLogger(Level level, MultiplexingLogger& mpx, grpc::ServerReaderWriterInterface<T, U>* server)
         : logging_level{level}, server{server}, mpx_logger{mpx}
     {
         mpx_logger.add_logger(this);
@@ -57,7 +57,7 @@ public:
 
 private:
     Level logging_level;
-    grpc::ServerWriterInterface<T>* server;
+    grpc::ServerReaderWriterInterface<T, U>* server;
     MultiplexingLogger& mpx_logger;
 };
 } // namespace logging

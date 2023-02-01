@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,4 +33,5 @@ extern "C"
     IMPL_MOCK_DEFAULT(1, ssh_channel_get_exit_status);
     IMPL_MOCK_DEFAULT(2, ssh_event_dopoll);
     IMPL_MOCK_DEFAULT(2, ssh_add_channel_callbacks);
+    IMPL_MOCK_DEFAULT(1, ssh_get_error);
 }

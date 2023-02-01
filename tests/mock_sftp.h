@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,5 +30,16 @@ DECL_MOCK(sftp_write);
 DECL_MOCK(sftp_read);
 DECL_MOCK(sftp_get_error);
 DECL_MOCK(sftp_close);
+DECL_MOCK(sftp_stat);
+DECL_MOCK(sftp_lstat);
+DECL_MOCK(sftp_opendir);
+DECL_MOCK(sftp_readdir);
+DECL_MOCK(sftp_readlink);
+DECL_MOCK(sftp_mkdir);
+DECL_MOCK(sftp_symlink);
+DECL_MOCK(sftp_unlink);
+DECL_MOCK(sftp_setstat);
+DECL_MOCK(sftp_dir_eof);
+DECL_MOCK(sftp_chmod);
 
 #endif // MULTIPASS_MOCK_SFTP_H

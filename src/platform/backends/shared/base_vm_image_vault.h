@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2022 Canonical, Ltd.
+ * Copyright (C) Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -77,7 +77,7 @@ protected:
             auto image_host = image_host_for(query.remote_name);
             auto info = image_host->info_for(query);
 
-            if (info != nullopt)
+            if (info != std::nullopt)
                 return *info;
         }
         else
