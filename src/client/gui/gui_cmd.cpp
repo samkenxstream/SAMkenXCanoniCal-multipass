@@ -28,6 +28,7 @@
 
 #include <QApplication>
 #include <QDesktopServices>
+#include <QLockFile>
 #include <QStyle>
 #include <QtConcurrent/QtConcurrent>
 
@@ -97,6 +98,13 @@ void set_input_state_for(QList<QAction*> actions, const mp::InstanceStatus& stat
 
 mp::ReturnCode cmd::GuiCmd::run(mp::ArgParser* parser)
 {
+    QLockFile is_running{QDir::tempPath() + "/multipass_gui_running"};
+    if (!is_running.tryLock())
+    {
+        cout << "Application is already running";
+        return ReturnCode::Ok;
+    }
+
     if (!QSystemTrayIcon::isSystemTrayAvailable())
     {
         cerr << "System tray not supported\n";
@@ -115,7 +123,8 @@ mp::ReturnCode cmd::GuiCmd::run(mp::ArgParser* parser)
     create_menu();
     tray_icon.show();
 
-    QFile first_run_file(MP_STDPATHS.writableLocation(StandardPaths::AppDataLocation) + "/first_run");
+    QDir data_dir{MP_STDPATHS.writableLocation(StandardPaths::AppDataLocation)};
+    QFile first_run_file(data_dir.filePath("first_run"));
 
     if (!first_run_file.exists())
     {
@@ -123,6 +132,10 @@ mp::ReturnCode cmd::GuiCmd::run(mp::ArgParser* parser)
         // A platform dependent mechanism is used to get the messages via a QStringList.
         auto notification_area_strings = mp::cli::platform::gui_tray_notification_strings();
         tray_icon.showMessage(notification_area_strings[0], notification_area_strings[1], tray_icon.icon());
+
+        if (!data_dir.exists())
+            data_dir.mkpath(".");
+
         first_run_file.open(QIODevice::WriteOnly);
         first_run_file.close();
     }
@@ -303,7 +316,7 @@ void cmd::GuiCmd::create_menu()
 
     about_client_version.setEnabled(false);
     about_daemon_version.setEnabled(false);
-    about_copyright.setText("Copyright © 2017-2022 Canonical Ltd.");
+    about_copyright.setText("Copyright (C) Canonical, Ltd.");
     about_copyright.setEnabled(false);
 
     about_menu.insertActions(0, {&autostart_option, &about_client_version, &about_daemon_version, &about_copyright});

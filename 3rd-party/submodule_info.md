@@ -7,12 +7,12 @@ info on where to find release information about the submodule.
 **This file needs updating when a submodule is updated!**
 
 ### gRPC
-Version: 1.41.0 (+[our patches](https://github.com/CanonicalLtd/grpc/compare/v1.41.0..64647dc0)) |
+Version: 1.52.1 (+[our patches](https://github.com/CanonicalLtd/grpc/compare/v1.52.1..ba8e7f72)) |
 <https://github.com/CanonicalLtd/grpc.git> |
 <https://github.com/grpc/grpc/releases>
 
 ### libssh
-Version: 0.9.6 (+[our patches](https://github.com/CanonicalLtd/libssh/compare/libssh-0.9.6..6f4ec9be)) |
+Version: 0.10.4 (+[our patches](https://github.com/CanonicalLtd/libssh/compare/libssh-0.10.4..3413f2fe)) |
 <https://github.com/CanonicalLtd/libssh.git> |
 <https://www.libssh.org/>
 
@@ -27,7 +27,7 @@ Version: 1.4.2 |
 <https://github.com/Skycoder42/QHotkey/releases>
 
 ### scope_guard
-Version: 1.0.0 |
+Version: 1.1.0 |
 <https://github.com/ricab/scope_guard.git> |
 <https://github.com/ricab/scope_guard/releases>
 
@@ -57,6 +57,6 @@ Version: v0.20210107 |
 <https://github.com/moby/hyperkit/releases>
 
 ### POCO
-Version: 1.11.2 |
+Version: 1.12.4 |
 <https://github.com/pocoproject/poco.git> |
 <https://github.com/pocoproject/poco/releases>

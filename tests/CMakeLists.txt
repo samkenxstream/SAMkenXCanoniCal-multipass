@@ -1,4 +1,4 @@
-# Copyright © 2017-2023 Canonical Ltd.
+# Copyright (C) Canonical, Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -103,6 +103,7 @@ add_executable(multipass_tests
   test_ssh_session.cpp
   test_sshfs_server_process_spec.cpp
   test_sshfsmount.cpp
+  test_sshfs_mount_handler.cpp
   test_ssl_cert_provider.cpp
   test_timer.cpp
   test_top_catch_all.cpp

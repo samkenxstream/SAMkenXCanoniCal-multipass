@@ -47,6 +47,7 @@ struct DaemonFind : public mpt::DaemonTestFixture
         EXPECT_CALL(mock_settings, register_handler).WillRepeatedly(Return(nullptr));
         EXPECT_CALL(mock_settings, unregister_handler).Times(AnyNumber());
         EXPECT_CALL(mock_settings, get(Eq(mp::winterm_key))).WillRepeatedly(Return("none"));
+        EXPECT_CALL(mock_settings, get(Eq(mp::driver_key))).WillRepeatedly(Return("nohk")); // TODO hk migration, remove
     }
 
     mpt::MockPlatform::GuardedMock attr{mpt::MockPlatform::inject<NiceMock>()};
@@ -96,12 +97,13 @@ TEST_F(DaemonFind, blankQueryReturnsAllData)
                                     HasSubstr(blueprint_description_for(blueprint1_name)), HasSubstr(blueprint2_name),
                                     HasSubstr(blueprint_description_for(blueprint2_name))));
 
-    EXPECT_EQ(total_lines_of_output(stream), 7);
+    EXPECT_EQ(total_lines_of_output(stream), 10);
 }
 
 TEST_F(DaemonFind, queryForDefaultReturnsExpectedData)
 {
     auto mock_image_vault = std::make_unique<NiceMock<mpt::MockVMImageVault>>();
+    auto mock_blueprint_provider = std::make_unique<NiceMock<mpt::MockVMBlueprintProvider>>();
 
     EXPECT_CALL(*mock_image_vault, all_info_for(_)).WillOnce([](const mp::Query& query) {
         mpt::MockImageHost mock_image_host;
@@ -112,14 +114,16 @@ TEST_F(DaemonFind, queryForDefaultReturnsExpectedData)
     });
 
     config_builder.vault = std::move(mock_image_vault);
+    config_builder.blueprint_provider = std::move(mock_blueprint_provider);
     mp::Daemon daemon{config_builder.build()};
 
     std::stringstream stream;
-    send_command({"find", "default"}, stream);
+    send_command({"find", "default", "--only-images"}, stream);
 
     EXPECT_THAT(stream.str(), AllOf(HasSubstr(mpt::default_alias), HasSubstr(mpt::default_release_info)));
+    EXPECT_THAT(stream.str(), Not(HasSubstr("No blueprints found.")));
 
-    EXPECT_EQ(total_lines_of_output(stream), 2);
+    EXPECT_EQ(total_lines_of_output(stream), 3);
 }
 
 TEST_F(DaemonFind, queryForBlueprintReturnsExpectedData)
@@ -129,37 +133,27 @@ TEST_F(DaemonFind, queryForBlueprintReturnsExpectedData)
 
     static constexpr auto blueprint_name = "foo";
 
-    EXPECT_CALL(*mock_image_vault, all_info_for(_)).WillOnce(Throw(std::runtime_error("")));
-
-    EXPECT_CALL(*mock_blueprint_provider, info_for(_)).WillOnce([](auto...) {
-        mp::VMImageInfo info;
-
-        info.aliases.append(blueprint_name);
-        info.release_title = QString::fromStdString(blueprint_description_for(blueprint_name));
-
-        return info;
-    });
-
     config_builder.vault = std::move(mock_image_vault);
     config_builder.blueprint_provider = std::move(mock_blueprint_provider);
     mp::Daemon daemon{config_builder.build()};
 
     std::stringstream stream;
-    send_command({"find", blueprint_name}, stream);
+    send_command({"find", blueprint_name, "--only-blueprints"}, stream);
 
     EXPECT_THAT(stream.str(), AllOf(HasSubstr(blueprint_name), HasSubstr(blueprint_description_for(blueprint_name))));
+    EXPECT_THAT(stream.str(), Not(HasSubstr("No images found.")));
 
-    EXPECT_EQ(total_lines_of_output(stream), 2);
+    EXPECT_EQ(total_lines_of_output(stream), 3);
 }
 
-TEST_F(DaemonFind, unknownQueryReturnsError)
+TEST_F(DaemonFind, unknownQueryReturnsEmpty)
 {
     auto mock_image_vault = std::make_unique<NiceMock<mpt::MockVMImageVault>>();
     auto mock_blueprint_provider = std::make_unique<NiceMock<mpt::MockVMBlueprintProvider>>();
 
     EXPECT_CALL(*mock_image_vault, all_info_for(_)).WillOnce(Throw(std::runtime_error("")));
 
-    EXPECT_CALL(*mock_blueprint_provider, info_for(_)).WillOnce(Throw(std::out_of_range("")));
+    EXPECT_CALL(*mock_blueprint_provider, info_for(_)).WillOnce(Return(std::nullopt));
 
     config_builder.vault = std::move(mock_image_vault);
     config_builder.blueprint_provider = std::move(mock_blueprint_provider);
@@ -167,10 +161,9 @@ TEST_F(DaemonFind, unknownQueryReturnsError)
 
     constexpr auto phony_name = "phony";
     std::stringstream stream;
-    send_command({"find", phony_name}, trash_stream, stream);
+    send_command({"find", phony_name}, stream);
 
-    EXPECT_THAT(stream.str(),
-                HasSubstr(fmt::format("Unable to find an image or Blueprint matching \"{}\"", phony_name)));
+    EXPECT_THAT(stream.str(), HasSubstr("No images or blueprints found."));
 }
 
 TEST_F(DaemonFind, forByRemoteReturnsExpectedData)
@@ -203,5 +196,58 @@ TEST_F(DaemonFind, forByRemoteReturnsExpectedData)
                                     HasSubstr(fmt::format("{}{}", remote_name, mpt::another_alias)),
                                     HasSubstr(mpt::another_release_info)));
 
-    EXPECT_EQ(total_lines_of_output(stream), 3);
+    EXPECT_EQ(total_lines_of_output(stream), 4);
+}
+
+TEST_F(DaemonFind, invalidRemoteNameAndEmptySearchString)
+{
+    const NiceMock<mpt::MockImageHost> mock_image_host;
+    auto mock_image_vault = std::make_unique<NiceMock<const mpt::MockVMImageVault>>();
+
+    constexpr std::string_view remote_name = "nonsense";
+    const std::string error_msg = fmt::format(
+        "Remote \'{}\' is not found. Please use `multipass find` for supported remotes and images.", remote_name);
+
+    EXPECT_CALL(*mock_image_vault, image_host_for(_)).Times(1).WillOnce([&error_msg](auto...) {
+        throw std::runtime_error(error_msg);
+        return nullptr;
+    });
+
+    config_builder.vault = std::move(mock_image_vault);
+    mp::Daemon daemon{config_builder.build()};
+
+    const std::string full_name = std::string(remote_name) + ":";
+    std::stringstream cerr_Stream;
+    // std::cout is the place holder here.
+    send_command({"find", full_name}, std::cout, cerr_Stream);
+
+    EXPECT_THAT(cerr_Stream.str(), HasSubstr(error_msg));
+    EXPECT_EQ(total_lines_of_output(cerr_Stream), 1);
+}
+
+TEST_F(DaemonFind, invalidRemoteNameAndNonEmptySearchString)
+{
+    const NiceMock<mpt::MockImageHost> mock_image_host;
+    auto mock_image_vault = std::make_unique<NiceMock<const mpt::MockVMImageVault>>();
+
+    constexpr std::string_view remote_name = "nonsense";
+    const std::string error_msg = fmt::format(
+        "Remote \'{}\' is not found. Please use `multipass find` for supported remotes and images.", remote_name);
+
+    EXPECT_CALL(*mock_image_vault, image_host_for(_)).Times(1).WillOnce([&error_msg](auto...) {
+        throw std::runtime_error(error_msg);
+        return nullptr;
+    });
+
+    config_builder.vault = std::move(mock_image_vault);
+    mp::Daemon daemon{config_builder.build()};
+
+    constexpr std::string_view search_string = "default";
+    const std::string full_name = std::string(remote_name) + ":" + std::string(search_string);
+    std::stringstream cerr_Stream;
+    // std::cout is the place holder here.
+    send_command({"find", full_name}, std::cout, cerr_Stream);
+
+    EXPECT_THAT(cerr_Stream.str(), HasSubstr(error_msg));
+    EXPECT_EQ(total_lines_of_output(cerr_Stream), 1);
 }

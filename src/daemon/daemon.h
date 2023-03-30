@@ -146,6 +146,7 @@ private:
     grpc::Status cancel_vm_shutdown(const VirtualMachine& vm);
     grpc::Status cmd_vms(const std::vector<std::string>& tgts, std::function<grpc::Status(VirtualMachine&)> cmd);
     void init_mounts(const std::string& name);
+    void stop_mounts(const std::string& name);
     MountHandler::UPtr make_mount(VirtualMachine* vm, const std::string& target, const VMMount& mount);
 
     struct AsyncOperationStatus
@@ -164,6 +165,9 @@ private:
                              std::promise<grpc::Status>* status_promise, const std::string& errors);
     void finish_async_operation(QFuture<AsyncOperationStatus> async_future);
     QFutureWatcher<AsyncOperationStatus>* create_future_watcher(std::function<void()> const& finished_op = []() {});
+
+    grpc::Status migrate_from_hyperkit(
+        grpc::ServerReaderWriterInterface<SetReply, SetRequest>* server); // TODO temporary code, remove
 
     std::unique_ptr<const DaemonConfig> config;
     std::unordered_map<std::string, VMSpecs> vm_instance_specs;

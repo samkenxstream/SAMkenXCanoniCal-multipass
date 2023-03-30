@@ -19,6 +19,7 @@
 
 #include <multipass/exceptions/aborted_download_exception.h>
 #include <multipass/exceptions/create_image_exception.h>
+#include <multipass/exceptions/image_vault_exceptions.h>
 #include <multipass/exceptions/unsupported_image_exception.h>
 #include <multipass/json_writer.h>
 #include <multipass/logging/log.h>
@@ -247,7 +248,8 @@ mp::DefaultVMImageVault::~DefaultVMImageVault()
 }
 
 mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, const Query& query,
-                                                 const PrepareAction& prepare, const ProgressMonitor& monitor)
+                                                 const PrepareAction& prepare, const ProgressMonitor& monitor,
+                                                 const bool unlock, const std::optional<std::string>& checksum)
 {
     {
         std::lock_guard<decltype(fetch_mutex)> lock{fetch_mutex};
@@ -260,7 +262,7 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
         }
     }
 
-    if (query.query_type != Query::Type::Alias && !mp::platform::is_image_url_supported())
+    if (!unlock && query.query_type != Query::Type::Alias && !MP_PLATFORM.is_image_url_supported())
         throw std::runtime_error(fmt::format("http and file based images are not supported"));
 
     if (query.query_type == Query::Type::LocalFile)
@@ -313,8 +315,11 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
         {
             QUrl image_url(QString::fromStdString(query.release));
 
-            // Generate a sha256 hash based on the URL and use that for the id
-            id = QCryptographicHash::hash(query.release.c_str(), QCryptographicHash::Sha256).toHex().toStdString();
+            // If no checksum given, generate a sha256 hash based on the URL and use that for the id
+            id =
+                checksum
+                    ? *checksum
+                    : QCryptographicHash::hash(query.release.c_str(), QCryptographicHash::Sha256).toHex().toStdString();
             auto last_modified = url_downloader->last_modified(image_url);
 
             std::lock_guard<decltype(fetch_mutex)> lock{fetch_mutex};
@@ -350,7 +355,7 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
                                        {},
                                        last_modified.toString(),
                                        0,
-                                       false};
+                                       checksum.has_value()};
                 const auto image_filename = mp::vault::filename_for(image_url.path());
                 // Attempt to make a sane directory name based on the filename of the image
 
@@ -370,8 +375,10 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
         else
         {
             const auto info = info_for(query);
+            if (!info)
+                throw mp::ImageNotFoundException(query.release, query.remote_name);
 
-            id = info.id.toStdString();
+            id = info->id.toStdString();
 
             std::lock_guard<decltype(fetch_mutex)> lock{fetch_mutex};
             if (!query.name.empty())
@@ -410,12 +417,12 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type, co
             else
             {
                 const auto image_dir =
-                    MP_UTILS.make_dir(images_dir, QString("%1-%2").arg(info.release).arg(info.version));
+                    MP_UTILS.make_dir(images_dir, QString("%1-%2").arg(info->release).arg(info->version));
 
                 // Had to use std::bind here to workaround the 5 allowable function arguments constraint of
                 // QtConcurrent::run()
                 future = QtConcurrent::run(std::bind(&DefaultVMImageVault::download_and_prepare_source_image, this,
-                                                     info, source_image, image_dir, fetch_type, prepare, monitor));
+                                                     *info, source_image, image_dir, fetch_type, prepare, monitor));
 
                 in_progress_image_fetches[id] = future;
             }
@@ -510,12 +517,19 @@ void mp::DefaultVMImageVault::update_images(const FetchType& fetch_type, const P
             try
             {
                 auto info = info_for(record.second.query);
-                if (info.id.toStdString() != record.first)
+                if (!info)
+                    throw mp::ImageNotFoundException(record.second.query.release, record.second.query.remote_name);
+
+                if (info->id.toStdString() != record.first)
                 {
                     keys_to_update.push_back(record.first);
                 }
             }
             catch (const mp::UnsupportedImageException& e)
+            {
+                mpl::log(mpl::Level::warning, category, fmt::format("Skipping update: {}", e.what()));
+            }
+            catch (const mp::ImageNotFoundException& e)
             {
                 mpl::log(mpl::Level::warning, category, fmt::format("Skipping update: {}", e.what()));
             }
@@ -528,7 +542,7 @@ void mp::DefaultVMImageVault::update_images(const FetchType& fetch_type, const P
         mpl::log(mpl::Level::info, category, fmt::format("Updating {} source image to latest", record.query.release));
         try
         {
-            fetch_image(fetch_type, record.query, prepare, monitor);
+            fetch_image(fetch_type, record.query, prepare, monitor, false, std::nullopt);
 
             // Remove old image
             std::lock_guard<decltype(fetch_mutex)> lock{fetch_mutex};
@@ -600,6 +614,7 @@ mp::VMImage mp::DefaultVMImageVault::download_and_prepare_source_image(
 
         if (info.verify)
         {
+            mpl::log(mpl::Level::debug, category, fmt::format("Verifying hash \"{}\"", id));
             monitor(LaunchProgress::VERIFY, -1);
             mp::vault::verify_image_download(source_image.image_path, id);
         }
@@ -708,7 +723,10 @@ mp::VMImage mp::DefaultVMImageVault::finalize_image_records(const Query& query, 
 mp::VMImageInfo mp::DefaultVMImageVault::get_kernel_query_info(const std::string& name)
 {
     Query kernel_query{name, "default", false, "", Query::Type::Alias};
-    return info_for(kernel_query);
+    auto info = info_for(kernel_query);
+    if (!info)
+        throw mp::ImageNotFoundException("default", "");
+    return *info;
 }
 
 namespace

@@ -63,6 +63,7 @@ public:
     virtual bool link(const char* target, const char* link) const;
     virtual bool symlink(const char* target, const char* link, bool is_dir) const;
     virtual int utime(const char* path, int atime, int mtime) const;
+    virtual QString get_username() const;
     virtual QDir get_alias_scripts_folder() const;
     virtual void create_alias_script(const std::string& alias, const AliasDefinition& def) const;
     virtual void remove_alias_script(const std::string& alias) const;
@@ -74,6 +75,7 @@ public:
     virtual SettingSpec::Set extra_client_settings() const;
     virtual QString default_driver() const;
     virtual QString default_privileged_mounts() const;
+    virtual bool is_image_url_supported() const;
 };
 
 QString interpret_setting(const QString& key, const QString& val);
@@ -90,7 +92,6 @@ UpdatePrompt::UPtr make_update_prompt();
 std::unique_ptr<Process> make_sshfs_server_process(const SSHFSServerConfig& config);
 std::unique_ptr<Process> make_process(std::unique_ptr<ProcessSpec>&& process_spec);
 int symlink_attr_from(const char* path, sftp_attributes_struct* attr);
-bool is_image_url_supported();
 
 std::function<int()> make_quit_watchdog(); // call while single-threaded; call result later, in dedicated thread
 

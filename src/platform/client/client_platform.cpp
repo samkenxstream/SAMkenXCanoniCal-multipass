@@ -57,7 +57,12 @@ int mcp::getgid()
     return ::getgid();
 }
 
-std::pair<std::string, std::string> mcp::Platform::get_user_password(mp::Terminal*) const
+std::string mcp::Platform::get_password(mp::Terminal*) const
 {
     return {};
+}
+
+void mcp::Platform::enable_ansi_escape_chars() const
+{
+    return;
 }

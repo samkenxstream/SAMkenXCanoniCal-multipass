@@ -33,8 +33,9 @@ struct TestSpinnerCallbacks : public Test
 {
     auto clearStreamMatcher()
     {
-        static const std::regex clear_regex{R"(\s*)"}; /* A "clear" stream can either be empty or made up of whitespaces
-                                                          (including carriage returns) */
+        static const std::regex clear_regex{
+            R"(\u001B\[2K\u001B\[0A\u001B\[0E|^$)"}; /* A "clear" stream should have nothing on the current
+                                     line and the cursor in the leftmost position */
         return Truly([](const auto& str) {
             return std::regex_match(str, clear_regex); // (gtest regex not cutting it on macOS)
         });
@@ -70,7 +71,7 @@ TEST_P(TestLoggingSpinnerCallbacks, loggingSpinnerCallbackLogs)
 
     EXPECT_THAT(err.str(), StrEq(log));
     EXPECT_THAT(out.str(), clearStreamMatcher()); /* this is not empty because print stops, stop clears, and clear
-                                                     prints carriage returns and spaces */
+                                                     prints ANSI escape characters to clear the line */
 }
 
 TEST_P(TestLoggingSpinnerCallbacks, loggingSpinnerCallbackIgnoresEmptyLog)
@@ -109,21 +110,17 @@ TEST_F(TestSpinnerCallbacks, iterativeSpinnerCallbackIgnoresEmptyMessage)
     EXPECT_THAT(out.str(), IsEmpty());
 }
 
-TEST_F(TestSpinnerCallbacks, iterativeSpinnerCallbackHandlesCredentialRequest)
+TEST_F(TestSpinnerCallbacks, iterativeSpinnerCallbackHandlesPasswordRequest)
 {
-    constexpr auto usr = "ubuntu", pwd = "xyz";
+    constexpr auto pwd = "xyz";
     auto [mock_client_platform, guard] = mpt::MockClientPlatform::inject<StrictMock>();
     mpt::MockClientReaderWriter<mp::RestartRequest, mp::RestartReply> mock_client;
 
     mp::RestartReply reply;
-    reply.set_credentials_requested(true);
+    reply.set_password_requested(true);
 
-    EXPECT_CALL(*mock_client_platform, get_user_password(&term)).WillOnce(Return(std::pair{usr, pwd}));
-    EXPECT_CALL(mock_client, Write(Property(&mp::RestartRequest::user_credentials,
-                                            AllOf(Property(&mp::UserCredentials::username, StrEq(usr)),
-                                                  Property(&mp::UserCredentials::password, StrEq(pwd)))),
-                                   _))
-        .WillOnce(Return(true));
+    EXPECT_CALL(*mock_client_platform, get_password(&term)).WillOnce(Return(pwd));
+    EXPECT_CALL(mock_client, Write(Property(&mp::RestartRequest::password, StrEq(pwd)), _)).WillOnce(Return(true));
 
     auto cb = mp::make_iterative_spinner_callback<mp::RestartRequest, mp::RestartReply>(spinner, term);
     cb(reply, &mock_client);

@@ -19,6 +19,7 @@
 #include "lxd_request.h"
 
 #include <multipass/exceptions/aborted_download_exception.h>
+#include <multipass/exceptions/image_vault_exceptions.h>
 #include <multipass/exceptions/local_socket_connection_exception.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
@@ -157,7 +158,8 @@ mp::LXDVMImageVault::LXDVMImageVault(std::vector<VMImageHost*> image_hosts, URLD
 }
 
 mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const Query& query,
-                                             const PrepareAction& prepare, const ProgressMonitor& monitor)
+                                             const PrepareAction& prepare, const ProgressMonitor& monitor,
+                                             const bool unlock, const std::optional<std::string>& checksum)
 {
     // Look for an already existing instance and get its image info
     try
@@ -194,7 +196,7 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
             {
                 const auto info = info_for(image_query);
 
-                source_image.original_release = info.release_title.toStdString();
+                source_image.original_release = info->release_title.toStdString();
             }
             catch (const std::exception&)
             {
@@ -224,7 +226,11 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
 
     if (query.query_type == Query::Type::Alias)
     {
-        info = info_for(query);
+        if (auto image_info = info_for(query); image_info)
+            info = *image_info;
+        else
+            throw mp::ImageNotFoundException(query.release, query.remote_name);
+
         id = info.id;
 
         source_image.id = id.toStdString();
@@ -239,8 +245,10 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
 
         if (query.query_type == Query::Type::HttpDownload)
         {
-            // Generate a sha256 hash based on the URL and use that for the id
-            id = QString(QCryptographicHash::hash(query.release.c_str(), QCryptographicHash::Sha256).toHex());
+            // If no checksum given, generate a sha256 hash based on the URL and use that for the id
+            id = checksum
+                     ? QString::fromStdString(*checksum)
+                     : QString(QCryptographicHash::hash(query.release.c_str(), QCryptographicHash::Sha256).toHex());
             last_modified = url_downloader->last_modified(image_url);
         }
         else
@@ -253,7 +261,8 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
             last_modified = QDateTime::currentDateTime();
         }
 
-        info = VMImageInfo{{}, {}, {}, {}, true, image_url.url(), {}, {}, id, {}, last_modified.toString(), 0, false};
+        info = VMImageInfo{
+            {}, {}, {}, {}, true, image_url.url(), {}, {}, id, {}, last_modified.toString(), 0, checksum.has_value()};
 
         source_image.id = id.toStdString();
         source_image.release_date = last_modified.toString(Qt::ISODateWithMs).toStdString();
@@ -406,13 +415,15 @@ void mp::LXDVMImageVault::update_images(const FetchType& fetch_type, const Prepa
             try
             {
                 auto info = info_for(query);
+                if (!info)
+                    throw mp::ImageNotFoundException(query.release, query.remote_name);
 
-                if (info.id != id)
+                if (info->id != id)
                 {
                     mpl::log(mpl::Level::info, category,
                              fmt::format("Updating {} source image to latest", query.release));
 
-                    lxd_download_image(info, query, monitor, image_info["last_used_at"].toString());
+                    lxd_download_image(*info, query, monitor, image_info["last_used_at"].toString());
 
                     lxd_request(manager, "DELETE", QUrl(QString("%1/images/%2").arg(base_url.toString()).arg(id)));
                 }
@@ -511,6 +522,7 @@ void mp::LXDVMImageVault::poll_download_operation(const QJsonObject& json_reply,
                           .arg(json_reply["metadata"].toObject()["id"].toString()));
 
         // Instead of polling, need to use websockets to get events
+        auto last_download_progress = -2;
         while (true)
         {
             try
@@ -533,11 +545,14 @@ void mp::LXDVMImageVault::poll_download_operation(const QJsonObject& json_reply,
                     auto download_progress = parse_percent_as_int(
                         task_reply["metadata"].toObject()["metadata"].toObject()["download_progress"].toString());
 
-                    if (!monitor(LaunchProgress::IMAGE, download_progress))
+                    if (last_download_progress != download_progress &&
+                        !monitor(LaunchProgress::IMAGE, download_progress))
                     {
                         mp::lxd_request(manager, "DELETE", task_url);
                         throw mp::AbortedDownloadException{"Download aborted"};
                     }
+
+                    last_download_progress = download_progress;
 
                     std::this_thread::sleep_for(1s);
                 }

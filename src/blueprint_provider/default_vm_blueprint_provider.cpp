@@ -21,6 +21,7 @@
 #include <multipass/exceptions/invalid_memory_size_exception.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
+#include <multipass/platform.h>
 #include <multipass/poco_zip_utils.h>
 #include <multipass/query.h>
 #include <multipass/url_downloader.h>
@@ -41,44 +42,328 @@ namespace mpl = multipass::logging;
 namespace
 {
 const QString github_blueprints_archive_name{"multipass-blueprints.zip"};
-const QString blueprint_dir_version{"v1"};
+
+// The folders where to read definitions. The list is sorted by precedence.
+constexpr auto version_v1{"v1"};
+constexpr auto version_v2{"v2"};
+const QStringList blueprint_dir_versions{version_v2, version_v1};
+
 constexpr auto category = "blueprint provider";
 
-auto blueprints_map_for(const std::string& archive_file_path, bool& needs_update)
+static constexpr auto bad_conversion_template{"Cannot convert \'{}\' key for the {} Blueprint"};
+const auto runs_on_key{"runs-on"};
+const auto instances_key{"instances"};
+
+bool runs_on(const std::string& blueprint_name, const YAML::Node& blueprint_node, const std::string& arch)
+{
+    if (blueprint_node["blueprint-version"].as<std::string>() == version_v1)
+    {
+        if (blueprint_node[runs_on_key])
+        {
+            try
+            {
+                const auto runs_on = blueprint_node[runs_on_key].as<std::vector<std::string>>();
+
+                return std::find(runs_on.cbegin(), runs_on.cend(), arch) != runs_on.cend();
+            }
+            catch (const YAML::BadConversion&)
+            {
+                throw mp::InvalidBlueprintException(fmt::format(bad_conversion_template, runs_on_key, blueprint_name));
+            }
+        }
+        else
+        {
+            return true;
+        }
+    }
+
+    if (blueprint_node[instances_key] && blueprint_node[instances_key][blueprint_name] &&
+        blueprint_node[instances_key][blueprint_name]["images"])
+    {
+        if (blueprint_node[instances_key][blueprint_name]["images"][arch])
+        {
+            if (blueprint_node[instances_key][blueprint_name]["images"][arch]["url"])
+                return true;
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    throw mp::InvalidBlueprintException(fmt::format(bad_conversion_template, instances_key, blueprint_name));
+}
+
+auto blueprints_map_for(const std::string& archive_file_path, bool& needs_update, const std::string& arch)
 {
     std::map<std::string, YAML::Node> blueprints_map;
     std::ifstream zip_stream{archive_file_path, std::ios::binary};
     auto zip_archive = MP_POCOZIPUTILS.zip_archive_for(zip_stream);
 
-    for (auto it = zip_archive.headerBegin(); it != zip_archive.headerEnd(); ++it)
+    for (const auto& blueprint_dir_version : blueprint_dir_versions)
     {
-        if (it->second.isFile())
+        for (auto it = zip_archive.headerBegin(); it != zip_archive.headerEnd(); ++it)
         {
-            auto file_name = it->second.getFileName();
-            QFileInfo file_info{QString::fromStdString(file_name)};
-
-            if (file_info.dir().dirName() == blueprint_dir_version &&
-                (file_info.suffix() == "yaml" || file_info.suffix() == "yml"))
+            if (it->second.isFile())
             {
-                if (!mp::utils::valid_hostname(file_info.baseName().toStdString()))
+                auto file_name = it->second.getFileName();
+                QFileInfo file_info{QString::fromStdString(file_name)};
+                auto blueprint_name = file_info.baseName().toStdString();
+
+                if (!blueprints_map.count(blueprint_name) && file_info.dir().dirName() == blueprint_dir_version &&
+                    (file_info.suffix() == "yaml" || file_info.suffix() == "yml"))
                 {
-                    mpl::log(
-                        mpl::Level::error, category,
-                        fmt::format("Invalid Blueprint name \'{}\': must be a valid host name", file_info.baseName()));
-                    needs_update = true;
+                    if (!mp::utils::valid_hostname(blueprint_name))
+                    {
+                        mpl::log(mpl::Level::error, category,
+                                 fmt::format("Invalid Blueprint name \'{}\': must be a valid host name",
+                                             file_info.baseName()));
+                        needs_update = true;
 
-                    continue;
+                        continue;
+                    }
+
+                    Poco::Zip::ZipInputStream zip_input_stream{zip_stream, it->second};
+                    std::ostringstream out(std::ios::binary);
+                    Poco::StreamCopier::copyStream(zip_input_stream, out);
+                    auto blueprint_node = YAML::Load(out.str());
+                    blueprint_node["blueprint-version"] = blueprint_dir_version.toStdString();
+
+                    try
+                    {
+                        if (runs_on(blueprint_name, blueprint_node, arch))
+                        {
+                            mpl::log(
+                                mpl::Level::debug, category,
+                                fmt::format("Loading \"{}\" {}", blueprint_name, blueprint_dir_version.toStdString()));
+
+                            blueprints_map[blueprint_name] = blueprint_node;
+                        }
+                        else
+                        {
+                            mpl::log(mpl::Level::debug, category,
+                                     fmt::format("Not loading foreign arch \"{}\" {}", blueprint_name,
+                                                 blueprint_dir_version.toStdString()));
+                        }
+                    }
+                    catch (mp::InvalidBlueprintException&)
+                    {
+                        mpl::log(mpl::Level::debug, category,
+                                 fmt::format("Not loading malformed \"{}\" {}", blueprint_name,
+                                             blueprint_dir_version.toStdString()));
+                    }
                 }
-
-                Poco::Zip::ZipInputStream zip_input_stream{zip_stream, it->second};
-                std::ostringstream out(std::ios::binary);
-                Poco::StreamCopier::copyStream(zip_input_stream, out);
-                blueprints_map[file_info.baseName().toStdString()] = YAML::Load(out.str());
             }
         }
     }
 
     return blueprints_map;
+}
+
+std::string get_blueprint_version(const YAML::Node& blueprint_instance)
+{
+    if (blueprint_instance["images"])
+        return "v2";
+
+    return "v1";
+}
+
+mp::Query blueprint_from_yaml_node(YAML::Node& blueprint_config, const std::string& blueprint_name,
+                                   mp::VirtualMachineDescription& vm_desc, mp::ClientLaunchData& client_launch_data,
+                                   const QString& arch, mp::URLDownloader* url_downloader, bool& needs_update)
+{
+    mp::Query query{"", "default", false, "", mp::Query::Type::Alias};
+
+    if (!blueprint_config[instances_key][blueprint_name])
+    {
+        throw mp::InvalidBlueprintException(
+            fmt::format("There are no instance definitions matching Blueprint name \"{}\"", blueprint_name));
+    }
+
+    auto blueprint_instance = blueprint_config[instances_key][blueprint_name];
+
+    if (!blueprint_config["blueprint-version"])
+    {
+        blueprint_config["blueprint-version"] = get_blueprint_version(blueprint_instance);
+    }
+
+    mpl::log(mpl::Level::debug, category,
+             fmt::format("Loading Blueprint \"{}\", version {}", blueprint_name,
+                         blueprint_config["blueprint-version"].as<std::string>()));
+
+    auto blueprint_aliases = blueprint_config["aliases"];
+    if (blueprint_aliases)
+    {
+        for (const auto& alias_to_be_defined : blueprint_aliases)
+        {
+            auto alias_name = alias_to_be_defined.first.as<std::string>();
+            auto instance_and_command = mp::utils::split(alias_to_be_defined.second.as<std::string>(), ":");
+            if (instance_and_command.size() != 2)
+                throw mp::InvalidBlueprintException(
+                    fmt::format("Alias definition must be in the form instance:command"));
+
+            mpl::log(mpl::Level::trace, category,
+                     fmt::format("Add alias [{}, {}, {}] to RPC answer", alias_name, instance_and_command[0],
+                                 instance_and_command[1]));
+            mp::AliasDefinition alias_definition{instance_and_command[0], instance_and_command[1], "map"};
+            client_launch_data.aliases_to_be_created.emplace(alias_name, alias_definition);
+        }
+    }
+
+    // TODO: Abstract all of the following YAML schema boilerplate
+
+    if (blueprint_config["blueprint-version"].as<std::string>() == version_v2)
+    {
+        auto arch_node = blueprint_instance["images"][arch.toStdString()];
+
+        if (arch_node["url"])
+            query.release = arch_node["url"].as<std::string>();
+        else
+            throw mp::InvalidBlueprintException(fmt::format("No image URL for architecture {} in Blueprint", arch));
+
+        query.query_type = mp::Query::Type::HttpDownload;
+
+        if (arch_node["sha256"])
+        {
+            auto sha256_string = arch_node["sha256"].as<std::string>();
+            if (QString::fromStdString(sha256_string).startsWith("http"))
+            {
+                mpl::log(mpl::Level::debug, category, fmt::format("Downloading SHA256 from {}", sha256_string));
+                auto downloaded_sha256 = url_downloader->download(QUrl(QString::fromStdString(sha256_string)));
+                if (downloaded_sha256.size() > 64)
+                    downloaded_sha256.truncate(64); // To account for newlines or other content.
+                sha256_string = QString(downloaded_sha256).toStdString();
+            }
+            mpl::log(mpl::Level::debug, category, fmt::format("Add SHA256 \"{}\" to image record", sha256_string));
+            vm_desc.image.id = sha256_string;
+        }
+        else
+        {
+            mpl::log(mpl::Level::debug, category, "No SHA256 to check");
+        }
+    }
+    else if (blueprint_instance["image"])
+    {
+        // This only supports the "alias" and "remote:alias" scheme at this time
+        auto image_str{blueprint_config[instances_key][blueprint_name]["image"].as<std::string>()};
+        auto tokens = mp::utils::split(image_str, ":");
+
+        if (tokens.size() == 2)
+        {
+            query.remote_name = tokens[0];
+            query.release = tokens[1];
+        }
+        else if (tokens.size() == 1)
+        {
+            query.release = tokens[0];
+        }
+        else
+        {
+            needs_update = true;
+            throw mp::InvalidBlueprintException("Unsupported image scheme in Blueprint");
+        }
+    }
+
+    if (blueprint_instance["limits"]["min-cpu"])
+    {
+        try
+        {
+            auto min_cpus = blueprint_instance["limits"]["min-cpu"].as<int>();
+
+            if (vm_desc.num_cores == 0)
+            {
+                vm_desc.num_cores = min_cpus;
+            }
+            else if (vm_desc.num_cores < min_cpus)
+            {
+                throw mp::BlueprintMinimumException("Number of CPUs", std::to_string(min_cpus));
+            }
+        }
+        catch (const YAML::BadConversion&)
+        {
+            needs_update = true;
+            throw mp::InvalidBlueprintException(fmt::format("Minimum CPU value in Blueprint is invalid"));
+        }
+    }
+
+    if (blueprint_instance["limits"]["min-mem"])
+    {
+        auto min_mem_size_str{blueprint_instance["limits"]["min-mem"].as<std::string>()};
+
+        try
+        {
+            mp::MemorySize min_mem_size{min_mem_size_str};
+
+            if (vm_desc.mem_size.in_bytes() == 0)
+            {
+                vm_desc.mem_size = min_mem_size;
+            }
+            else if (vm_desc.mem_size < min_mem_size)
+            {
+                throw mp::BlueprintMinimumException("Memory size", min_mem_size_str);
+            }
+        }
+        catch (const mp::InvalidMemorySizeException&)
+        {
+            needs_update = true;
+            throw mp::InvalidBlueprintException(fmt::format("Minimum memory size value in Blueprint is invalid"));
+        }
+    }
+
+    if (blueprint_instance["limits"]["min-disk"])
+    {
+        auto min_disk_space_str{blueprint_instance["limits"]["min-disk"].as<std::string>()};
+
+        try
+        {
+            mp::MemorySize min_disk_space{min_disk_space_str};
+
+            if (vm_desc.disk_space.in_bytes() == 0)
+            {
+                vm_desc.disk_space = min_disk_space;
+            }
+            else if (vm_desc.disk_space < min_disk_space)
+            {
+                throw mp::BlueprintMinimumException("Disk space", min_disk_space_str);
+            }
+        }
+        catch (const mp::InvalidMemorySizeException&)
+        {
+            needs_update = true;
+            throw mp::InvalidBlueprintException(fmt::format("Minimum disk space value in Blueprint is invalid"));
+        }
+    }
+
+    if (blueprint_instance["cloud-init"]["vendor-data"])
+    {
+        try
+        {
+            auto cloud_init_config = YAML::Load(blueprint_instance["cloud-init"]["vendor-data"].as<std::string>());
+
+            for (const auto& config : cloud_init_config)
+            {
+                if (config.first.IsScalar())
+                {
+                    vm_desc.vendor_data_config[config.first.Scalar()] = config.second;
+                }
+            }
+        }
+        catch (const YAML::BadConversion&)
+        {
+            needs_update = true;
+            throw mp::InvalidBlueprintException(
+                fmt::format("Cannot convert cloud-init data for the {} Blueprint", blueprint_name));
+        }
+    }
+
+    auto blueprint_workspaces = blueprint_instance["workspace"];
+    if (blueprint_workspaces && blueprint_workspaces.as<bool>())
+    {
+        mpl::log(mpl::Level::trace, category, fmt::format("Add workspace {} to RPC answer", blueprint_name));
+        client_launch_data.workspaces_to_be_created.push_back(blueprint_name);
+    }
+
+    return query;
 }
 } // namespace
 
@@ -108,191 +393,66 @@ mp::Query mp::DefaultVMBlueprintProvider::fetch_blueprint_for(const std::string&
 {
     update_blueprints();
 
-    Query query{"", "default", false, "", Query::Type::Alias};
     auto& blueprint_config = blueprint_map.at(blueprint_name);
 
-    if (!blueprint_config["instances"][blueprint_name])
-    {
-        throw InvalidBlueprintException(
-            fmt::format("There are no instance definitions matching Blueprint name \"{}\"", blueprint_name));
-    }
-
-    auto blueprint_aliases = blueprint_config["aliases"];
-    if (blueprint_aliases)
-    {
-        for (const auto& alias_to_be_defined : blueprint_aliases)
-        {
-            auto alias_name = alias_to_be_defined.first.as<std::string>();
-            auto instance_and_command = mp::utils::split(alias_to_be_defined.second.as<std::string>(), ":");
-            if (instance_and_command.size() != 2)
-                throw InvalidBlueprintException(fmt::format("Alias definition must be in the form instance:command"));
-
-            mpl::log(mpl::Level::trace, category,
-                     fmt::format("Add alias [{}, {}, {}] to RPC answer", alias_name, instance_and_command[0],
-                                 instance_and_command[1]));
-            AliasDefinition alias_definition{instance_and_command[0], instance_and_command[1], "map"};
-            client_launch_data.aliases_to_be_created.emplace(alias_name, alias_definition);
-        }
-    }
-
-    auto blueprint_instance = blueprint_config["instances"][blueprint_name];
-
-    // TODO: Abstract all of the following YAML schema boilerplate
-    if (blueprint_instance["image"])
-    {
-        // TODO: Support http later.
-        // This only supports the "alias" and "remote:alias" scheme at this time
-        auto image_str{blueprint_config["instances"][blueprint_name]["image"].as<std::string>()};
-        auto tokens = mp::utils::split(image_str, ":");
-
-        if (tokens.size() == 2)
-        {
-            query.remote_name = tokens[0];
-            query.release = tokens[1];
-        }
-        else if (tokens.size() == 1)
-        {
-            query.release = tokens[0];
-        }
-        else
-        {
-            needs_update = true;
-            throw InvalidBlueprintException("Unsupported image scheme in Blueprint");
-        }
-    }
-
-    if (blueprint_instance["limits"]["min-cpu"])
-    {
-        try
-        {
-            auto min_cpus = blueprint_instance["limits"]["min-cpu"].as<int>();
-
-            if (vm_desc.num_cores == 0)
-            {
-                vm_desc.num_cores = min_cpus;
-            }
-            else if (vm_desc.num_cores < min_cpus)
-            {
-                throw BlueprintMinimumException("Number of CPUs", std::to_string(min_cpus));
-            }
-        }
-        catch (const YAML::BadConversion&)
-        {
-            needs_update = true;
-            throw InvalidBlueprintException(fmt::format("Minimum CPU value in Blueprint is invalid"));
-        }
-    }
-
-    if (blueprint_instance["limits"]["min-mem"])
-    {
-        auto min_mem_size_str{blueprint_instance["limits"]["min-mem"].as<std::string>()};
-
-        try
-        {
-            MemorySize min_mem_size{min_mem_size_str};
-
-            if (vm_desc.mem_size.in_bytes() == 0)
-            {
-                vm_desc.mem_size = min_mem_size;
-            }
-            else if (vm_desc.mem_size < min_mem_size)
-            {
-                throw BlueprintMinimumException("Memory size", min_mem_size_str);
-            }
-        }
-        catch (const InvalidMemorySizeException&)
-        {
-            needs_update = true;
-            throw InvalidBlueprintException(fmt::format("Minimum memory size value in Blueprint is invalid"));
-        }
-    }
-
-    if (blueprint_instance["limits"]["min-disk"])
-    {
-        auto min_disk_space_str{blueprint_instance["limits"]["min-disk"].as<std::string>()};
-
-        try
-        {
-            MemorySize min_disk_space{min_disk_space_str};
-
-            if (vm_desc.disk_space.in_bytes() == 0)
-            {
-                vm_desc.disk_space = min_disk_space;
-            }
-            else if (vm_desc.disk_space < min_disk_space)
-            {
-                throw BlueprintMinimumException("Disk space", min_disk_space_str);
-            }
-        }
-        catch (const InvalidMemorySizeException&)
-        {
-            needs_update = true;
-            throw InvalidBlueprintException(fmt::format("Minimum disk space value in Blueprint is invalid"));
-        }
-    }
-
-    if (blueprint_instance["cloud-init"]["vendor-data"])
-    {
-        try
-        {
-            auto cloud_init_config = YAML::Load(blueprint_instance["cloud-init"]["vendor-data"].as<std::string>());
-
-            for (const auto& config : cloud_init_config)
-            {
-                if (config.first.IsScalar())
-                {
-                    vm_desc.vendor_data_config[config.first.Scalar()] = config.second;
-                }
-            }
-        }
-        catch (const YAML::BadConversion&)
-        {
-            needs_update = true;
-            throw InvalidBlueprintException(
-                fmt::format("Cannot convert cloud-init data for the {} Blueprint", blueprint_name));
-        }
-    }
-
-    auto blueprint_workspaces = blueprint_instance["workspace"];
-    if (blueprint_workspaces && blueprint_workspaces.as<bool>())
-    {
-        mpl::log(mpl::Level::trace, category, fmt::format("Add workspace {} to RPC answer", blueprint_name));
-        client_launch_data.workspaces_to_be_created.push_back(blueprint_name);
-    }
-
-    return query;
+    return blueprint_from_yaml_node(blueprint_config, blueprint_name, vm_desc, client_launch_data, arch, url_downloader,
+                                    needs_update);
 }
 
-mp::VMImageInfo mp::DefaultVMBlueprintProvider::info_for(const std::string& blueprint_name)
+mp::Query mp::DefaultVMBlueprintProvider::blueprint_from_file(const std::string& path,
+                                                              const std::string& blueprint_name,
+                                                              VirtualMachineDescription& vm_desc,
+                                                              ClientLaunchData& client_launch_data)
+{
+    if (!MP_PLATFORM.is_image_url_supported())
+        throw std::runtime_error(fmt::format("Launching a Blueprint from a file is not supported"));
+
+    mpl::log(mpl::Level::debug, category, fmt::format("Reading Blueprint '{}' from file {}", blueprint_name, path));
+
+    QFileInfo file_info{QString::fromStdString(path)};
+
+    if (!mp::utils::valid_hostname(blueprint_name))
+    {
+        auto error_message =
+            fmt::format("Invalid Blueprint name \'{}\': must be a valid host name", file_info.baseName());
+
+        mpl::log(mpl::Level::error, category, error_message);
+
+        throw InvalidBlueprintException(error_message);
+    }
+
+    YAML::Node blueprint_config;
+
+    try
+    {
+        blueprint_config = YAML::LoadFile(path);
+    }
+    catch (const YAML::BadFile&)
+    {
+        throw InvalidBlueprintException(fmt::format("Wrong file \'{}\'", path));
+    }
+
+    return blueprint_from_yaml_node(blueprint_config, blueprint_name, vm_desc, client_launch_data, arch, url_downloader,
+                                    needs_update);
+}
+
+std::optional<mp::VMImageInfo> mp::DefaultVMBlueprintProvider::info_for(const std::string& blueprint_name)
 {
     update_blueprints();
 
     static constexpr auto missing_key_template{"The \'{}\' key is required for the {} Blueprint"};
-    static constexpr auto bad_conversion_template{"Cannot convert \'{}\' key for the {} Blueprint"};
-    auto& blueprint_config = blueprint_map.at(blueprint_name);
+
+    YAML::Node blueprint_config;
+    if (auto it = blueprint_map.find(blueprint_name); it != blueprint_map.end())
+        blueprint_config = it->second;
+    else
+        return std::nullopt;
 
     VMImageInfo image_info;
     image_info.aliases.append(QString::fromStdString(blueprint_name));
 
     const auto description_key{"description"};
     const auto version_key{"version"};
-    const auto runs_on_key{"runs-on"};
-
-    if (blueprint_config[runs_on_key])
-    {
-        try
-        {
-            auto runs_on = blueprint_config[runs_on_key].as<std::vector<std::string>>();
-            if (std::find(runs_on.cbegin(), runs_on.cend(), arch.toStdString()) == runs_on.cend())
-            {
-                throw IncompatibleBlueprintException(blueprint_name);
-            }
-        }
-        catch (const YAML::BadConversion&)
-        {
-            throw InvalidBlueprintException(fmt::format(bad_conversion_template, runs_on_key, blueprint_name));
-        }
-    }
 
     if (!blueprint_config[description_key])
     {
@@ -340,7 +500,9 @@ std::vector<mp::VMImageInfo> mp::DefaultVMBlueprintProvider::all_blueprints()
     {
         try
         {
-            blueprint_info.push_back(info_for(key));
+            auto info = info_for(key);
+            assert(info && "key missing from blueprint map");
+            blueprint_info.push_back(*info);
         }
         catch (const InvalidBlueprintException& e)
         {
@@ -367,6 +529,16 @@ std::string mp::DefaultVMBlueprintProvider::name_from_blueprint(const std::strin
     if (blueprint_map.count(blueprint_name) == 1)
         return blueprint_name;
 
+    auto name_qstr = QString::fromStdString(blueprint_name);
+
+    if (name_qstr.startsWith("file://") &&
+        (name_qstr.toLower().endsWith(".yaml") || name_qstr.toLower().endsWith(".yml")))
+    {
+        auto file_path = name_qstr.remove(0, 7);
+        auto chop = file_path.at(file_path.size() - 4) == '.' ? 4 : 5;
+        return QFileInfo(file_path).fileName().chopped(chop).toStdString();
+    }
+
     return {};
 }
 
@@ -380,7 +552,7 @@ int mp::DefaultVMBlueprintProvider::blueprint_timeout(const std::string& bluepri
 
         auto& blueprint_config = blueprint_map.at(blueprint_name);
 
-        auto blueprint_instance = blueprint_config["instances"][blueprint_name];
+        auto blueprint_instance = blueprint_config[instances_key][blueprint_name];
 
         if (blueprint_instance["timeout"])
         {
@@ -407,7 +579,7 @@ void mp::DefaultVMBlueprintProvider::fetch_blueprints()
 {
     url_downloader->download_to(blueprints_url, archive_file_path, -1, -1, [](auto...) { return true; });
 
-    blueprint_map = blueprints_map_for(archive_file_path.toStdString(), needs_update);
+    blueprint_map = blueprints_map_for(archive_file_path.toStdString(), needs_update, arch.toStdString());
 }
 
 void mp::DefaultVMBlueprintProvider::update_blueprints()

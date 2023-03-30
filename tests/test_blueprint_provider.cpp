@@ -17,6 +17,7 @@
 
 #include "common.h"
 #include "mock_logger.h"
+#include "mock_platform.h"
 #include "mock_poco_zip_utils.h"
 #include "mock_url_downloader.h"
 #include "path.h"
@@ -46,6 +47,7 @@ namespace
 {
 const QString test_blueprints_zip{"/test-blueprints.zip"};
 const QString multipass_blueprints_zip{"/multipass-blueprints.zip"};
+const char* sha256_checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 struct VMBlueprintProvider : public Test
 {
@@ -81,12 +83,12 @@ TEST_F(VMBlueprintProvider, fetchBlueprintForUnknownBlueprintThrows)
     EXPECT_THROW(blueprint_provider.fetch_blueprint_for("phony", vm_desc, dummy_data), std::out_of_range);
 }
 
-TEST_F(VMBlueprintProvider, infoForUnknownBlueprintThrows)
+TEST_F(VMBlueprintProvider, infoForUnknownBlueprintReturnsEmpty)
 {
     mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
                                                       default_ttl};
 
-    EXPECT_THROW(blueprint_provider.info_for("phony"), std::out_of_range);
+    EXPECT_EQ(blueprint_provider.info_for("phony"), std::nullopt);
 }
 
 TEST_F(VMBlueprintProvider, invalidImageSchemeThrows)
@@ -353,10 +355,11 @@ TEST_F(VMBlueprintProvider, infoForReturnsExpectedInfo)
 
     auto blueprint = blueprint_provider.info_for("test-blueprint2");
 
-    ASSERT_EQ(blueprint.aliases.size(), 1);
-    EXPECT_EQ(blueprint.aliases[0], "test-blueprint2");
-    EXPECT_EQ(blueprint.release_title, "Another test blueprint");
-    EXPECT_EQ(blueprint.version, "0.1");
+    ASSERT_TRUE(blueprint);
+    ASSERT_EQ(blueprint->aliases.size(), 1);
+    EXPECT_EQ(blueprint->aliases[0], "test-blueprint2");
+    EXPECT_EQ(blueprint->release_title, "Another test blueprint");
+    EXPECT_EQ(blueprint->version, "0.1");
 }
 
 TEST_F(VMBlueprintProvider, allBlueprintsReturnsExpectedInfo)
@@ -376,8 +379,7 @@ TEST_F(VMBlueprintProvider, allBlueprintsReturnsExpectedInfo)
         "Invalid Blueprint: The 'version' key is required for the missing-version-blueprint Blueprint");
     logger_scope.mock_logger->expect_log(
         mpl::Level::error, "Invalid Blueprint name \'42-invalid-hostname-blueprint\': must be a valid host name");
-    logger_scope.mock_logger->expect_log(
-        mpl::Level::error, "Invalid Blueprint: Cannot convert 'runs-on' key for the invalid-arch Blueprint");
+    logger_scope.mock_logger->expect_log(mpl::Level::debug, "Not loading malformed \"invalid-arch\" v1");
 
     mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
                                                       default_ttl};
@@ -614,25 +616,26 @@ TEST_F(VMBlueprintProvider, invalidRunsOnThrows)
         mpt::match_what(StrEq(fmt::format("Cannot convert \'description\' key for the {} Blueprint", blueprint))));
 }
 
-TEST_F(VMBlueprintProvider, fetchInvalidRunsOnThrows)
+TEST_F(VMBlueprintProvider, fetchForInvalidReturnsEmpty)
 {
     mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
                                                       default_ttl};
 
     const std::string blueprint{"invalid-arch"};
-    MP_EXPECT_THROW_THAT(
-        blueprint_provider.info_for(blueprint), mp::InvalidBlueprintException,
-        mpt::match_what(StrEq(fmt::format("Cannot convert \'runs-on\' key for the {} Blueprint", blueprint))));
+    // This call fails with an std::nullopt exception because the Blueprint is invalid and was filtered out by
+    // blueprints_map_for() at provider construction.
+    EXPECT_EQ(blueprint_provider.info_for(blueprint), std::nullopt);
 }
 
-TEST_F(VMBlueprintProvider, infoForIncompatibleThrows)
+TEST_F(VMBlueprintProvider, infoForIncompatibleReturnsEmpty)
 {
     mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
                                                       default_ttl};
 
     const std::string blueprint{"arch-only"};
-    MP_EXPECT_THROW_THAT(blueprint_provider.info_for(blueprint), mp::IncompatibleBlueprintException,
-                         mpt::match_what(StrEq(blueprint)));
+    // This call fails with an std::nullopt exception because the Blueprint is invalid and was filtered out by
+    // blueprints_map_for() at provider construction.
+    EXPECT_EQ(blueprint_provider.info_for(blueprint), std::nullopt);
 }
 
 TEST_F(VMBlueprintProvider, infoForCompatibleReturnsExpectedInfo)
@@ -642,9 +645,10 @@ TEST_F(VMBlueprintProvider, infoForCompatibleReturnsExpectedInfo)
 
     auto blueprint = blueprint_provider.info_for("arch-only");
 
-    ASSERT_EQ(blueprint.aliases.size(), 1);
-    EXPECT_EQ(blueprint.aliases[0], "arch-only");
-    EXPECT_EQ(blueprint.release_title, "An arch-only blueprint");
+    ASSERT_TRUE(blueprint);
+    ASSERT_EQ(blueprint->aliases.size(), 1);
+    EXPECT_EQ(blueprint->aliases[0], "arch-only");
+    EXPECT_EQ(blueprint->release_title, "An arch-only blueprint");
 }
 
 TEST_F(VMBlueprintProvider, allBlueprintsReturnsExpectedInfoForArch)
@@ -660,4 +664,259 @@ TEST_F(VMBlueprintProvider, allBlueprintsReturnsExpectedInfoForArch)
                             (blueprint_info.release_title == "An arch-only blueprint"));
                 }) != blueprints.cend());
     ASSERT_EQ(blueprints[0].aliases.size(), 1);
+}
+
+//
+// Blueprints v2 tests.
+//
+
+TEST_F(VMBlueprintProvider, v2WithNoInstancesKeyNotAdded)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl};
+
+    EXPECT_EQ(blueprint_provider.info_for("no-instances"), std::nullopt);
+}
+
+TEST_F(VMBlueprintProvider, v2WithNoBlueprintKeyNotAdded)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl};
+
+    EXPECT_EQ(blueprint_provider.info_for("no-blueprint"), std::nullopt);
+}
+
+TEST_F(VMBlueprintProvider, v2WithNoImagesKeyNotAdded)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl};
+
+    EXPECT_EQ(blueprint_provider.info_for("no-images"), std::nullopt);
+}
+
+TEST_F(VMBlueprintProvider, v2WithNoUrlKeyNotAdded)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    EXPECT_EQ(blueprint_provider.info_for("no-url"), std::nullopt);
+}
+
+TEST_F(VMBlueprintProvider, v2MininalDefinitionAdded)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    EXPECT_NO_THROW(blueprint_provider.info_for("minimal"));
+}
+
+TEST_F(VMBlueprintProvider, v2MininalDefinitionWithShaOnUrlAdded)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    EXPECT_NO_THROW(blueprint_provider.info_for("minimal-with-sha256-url"));
+}
+
+TEST_F(VMBlueprintProvider, v2MininalDefinitionWithHardcodedShaAdded)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    EXPECT_NO_THROW(blueprint_provider.info_for("minimal-with-sha256-string"));
+}
+
+TEST_F(VMBlueprintProvider, v2ShaOnUrlIsCorrectlyPropagated)
+{
+    mpt::MockURLDownloader mock_url_downloader;
+
+    EXPECT_CALL(mock_url_downloader, download_to(_, _, _, _, _))
+        .WillOnce([this](const QUrl& url, const QString& file_name, int64_t size, const int download_type,
+                         const mp::ProgressMonitor& monitor) {
+            url_downloader.download_to(url, file_name, size, download_type, monitor);
+        });
+
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &mock_url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    mp::VirtualMachineDescription vm_desc;
+    mp::ClientLaunchData launch_data;
+
+    EXPECT_CALL(mock_url_downloader, download(_)).Times(1).WillRepeatedly([](auto) {
+        char full_sha256_string[73];
+        strcpy(full_sha256_string, sha256_checksum);
+        strcat(full_sha256_string, " sha256\n");
+        return QByteArray{full_sha256_string};
+    });
+
+    auto query = blueprint_provider.fetch_blueprint_for("minimal-with-sha256-url", vm_desc, launch_data);
+
+    ASSERT_EQ(vm_desc.image.id, sha256_checksum);
+}
+
+TEST_F(VMBlueprintProvider, v2HardcodedShaIsCorrectlyPropagated)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    mp::VirtualMachineDescription vm_desc;
+    mp::ClientLaunchData launch_data;
+
+    auto query = blueprint_provider.fetch_blueprint_for("minimal-with-sha256-string", vm_desc, launch_data);
+
+    ASSERT_EQ(vm_desc.image.id, sha256_checksum);
+}
+
+TEST_F(VMBlueprintProvider, v2WithoutShaIsCorrectlyPropagated)
+{
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    mp::VirtualMachineDescription vm_desc;
+    mp::ClientLaunchData launch_data;
+
+    auto query = blueprint_provider.fetch_blueprint_for("minimal", vm_desc, launch_data);
+
+    ASSERT_EQ(vm_desc.image.id, "");
+}
+
+//
+// Test loading Blueprints from file.
+//
+
+struct VMBlueprintFileLaunch : public VMBlueprintProvider
+{
+    mpt::MockPlatform::GuardedMock attr{mpt::MockPlatform::inject<NiceMock>()};
+    mpt::MockPlatform* mock_platform = attr.first;
+};
+
+struct VMBlueprintFileLaunchFromFile : public VMBlueprintFileLaunch,
+                                       public WithParamInterface<std::pair<std::string, std::string>>
+{
+};
+
+TEST_P(VMBlueprintFileLaunchFromFile, loadsFile)
+{
+    const auto& [file, blueprint_name] = GetParam();
+
+    mpt::MockURLDownloader mock_url_downloader;
+
+    EXPECT_CALL(mock_url_downloader, download_to(_, _, _, _, _))
+        .WillRepeatedly([](auto, const QString& file_name, auto...) {
+            QFile file(file_name);
+            file.open(QFile::WriteOnly);
+        });
+
+    ON_CALL(*mock_platform, is_image_url_supported()).WillByDefault(Return(true));
+
+    auto blueprint_path = QString(mpt::test_data_path() + "/blueprints/" + QString::fromStdString(file)).toStdString();
+
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &mock_url_downloader, cache_dir.path(),
+                                                      default_ttl, "multivacs"};
+
+    mp::VirtualMachineDescription vm_desc{0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}};
+
+    mp::ClientLaunchData dummy_data;
+
+    auto query = blueprint_provider.blueprint_from_file(blueprint_path, blueprint_name, vm_desc, dummy_data);
+
+    EXPECT_EQ(vm_desc.num_cores, 2);
+    EXPECT_EQ(vm_desc.mem_size, mp::MemorySize("2G"));
+    EXPECT_EQ(vm_desc.disk_space, mp::MemorySize("25G"));
+
+    auto yaml_as_str = mp::utils::emit_yaml(vm_desc.vendor_data_config);
+    EXPECT_THAT(yaml_as_str, AllOf(HasSubstr("runcmd"), HasSubstr("echo \"Have fun!\"")));
+}
+
+INSTANTIATE_TEST_SUITE_P(VMBlueprintFileLaunch, VMBlueprintFileLaunchFromFile,
+                         Values(std::pair{"v1/test-blueprint1.yaml", "test-blueprint1"},
+                                std::pair{"v2/test-blueprint1.yaml", "test-blueprint1"}));
+
+TEST_F(VMBlueprintFileLaunch, failsWithNonexistentFile)
+{
+    ON_CALL(*mock_platform, is_image_url_supported()).WillByDefault(Return(true));
+
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl};
+
+    mp::VirtualMachineDescription vm_desc{0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}};
+
+    mp::ClientLaunchData dummy_data;
+
+    MP_EXPECT_THROW_THAT(blueprint_provider.blueprint_from_file("/blah.yaml", "blah", vm_desc, dummy_data),
+                         mp::InvalidBlueprintException, mpt::match_what(StrEq("Wrong file '/blah.yaml'")));
+}
+
+TEST_F(VMBlueprintFileLaunch, fileLoadfailsWithInvalidHostName)
+{
+    ON_CALL(*mock_platform, is_image_url_supported()).WillByDefault(Return(true));
+
+    auto blueprint_path =
+        QString(mpt::test_data_path() + "/blueprints/v1/42-invalid-hostname-blueprint.yaml").toStdString();
+
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl};
+
+    mp::VirtualMachineDescription vm_desc{0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}};
+
+    mp::ClientLaunchData dummy_data;
+
+    MP_EXPECT_THROW_THAT(
+        blueprint_provider.blueprint_from_file(blueprint_path, "42-invalid-hostname-blueprint", vm_desc, dummy_data),
+        mp::InvalidBlueprintException,
+        mpt::match_what(StrEq("Invalid Blueprint name \'42-invalid-hostname-blueprint\': must be a valid host name")));
+}
+
+TEST_F(VMBlueprintFileLaunch, failsIfFileLaunchIsUnsupported)
+{
+    ON_CALL(*mock_platform, is_image_url_supported()).WillByDefault(Return(false));
+
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl};
+
+    mp::VirtualMachineDescription vm_desc{0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}};
+
+    mp::ClientLaunchData dummy_data;
+
+    MP_EXPECT_THROW_THAT(blueprint_provider.blueprint_from_file("/blah.yaml", "blah", vm_desc, dummy_data),
+                         std::runtime_error,
+                         mpt::match_what(StrEq("Launching a Blueprint from a file is not supported")));
+}
+
+struct NameFromBlueprintTestSuite : public VMBlueprintProvider,
+                                    public WithParamInterface<std::pair<std::string, std::string>>
+{
+};
+
+TEST_P(NameFromBlueprintTestSuite, nameFromBlueprintWorks)
+{
+    const auto& [input, output] = GetParam();
+
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl};
+
+    EXPECT_EQ(blueprint_provider.name_from_blueprint(input), output);
+}
+
+INSTANTIATE_TEST_SUITE_P(VMBlueprintProvider, NameFromBlueprintTestSuite,
+                         Values(std::pair{"file:///blah/blueprint1.yaml", "blueprint1"},
+                                std::pair{"file:///blah/blueprint2.yml", "blueprint2"},
+                                std::pair{"nonexistent-blueprint", ""}));
+
+TEST_F(VMBlueprintFileLaunch, fileLoadfailsWithNoUrl)
+{
+    auto blueprint_path = QString(mpt::test_data_path() + "/blueprints/v2/test-blueprint1.yaml").toStdString();
+
+    ON_CALL(*mock_platform, is_image_url_supported()).WillByDefault(Return(true));
+
+    mp::DefaultVMBlueprintProvider blueprint_provider{blueprints_zip_url, &url_downloader, cache_dir.path(),
+                                                      default_ttl, "microvac"};
+
+    mp::VirtualMachineDescription vm_desc{0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}};
+
+    mp::ClientLaunchData dummy_data;
+
+    MP_EXPECT_THROW_THAT(blueprint_provider.blueprint_from_file(blueprint_path, "test-blueprint1", vm_desc, dummy_data),
+                         mp::InvalidBlueprintException,
+                         mpt::match_what(StrEq("No image URL for architecture microvac in Blueprint")));
 }
