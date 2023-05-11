@@ -70,7 +70,7 @@ find_package(OpenSSL REQUIRED)
 add_subdirectory(3rd-party)
 
 # Qt config
-find_package(Qt5 COMPONENTS Core Network Widgets REQUIRED)
+find_package(Qt5 COMPONENTS Core Concurrent Network Widgets REQUIRED)
 
 function(determine_version OUTPUT_VARIABLE)
   # use upstream repo as the authoritative reference when checking for release status
@@ -90,6 +90,11 @@ function(determine_version OUTPUT_VARIABLE)
                   OUTPUT_VARIABLE GIT_VERSION
                   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
+  execute_process(COMMAND git rev-list --tags --max-count=1
+                  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                  OUTPUT_VARIABLE GIT_NEWEST_COMMIT
+		  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
   # only use -rc tags on release/* branches
   string(REGEX MATCH "release/[0-9]+.[0-9]+" GIT_RELEASE_MATCH "${GIT_RELEASE_BRANCH}")
   if(GIT_RELEASE_MATCH)
@@ -104,12 +109,12 @@ function(determine_version OUTPUT_VARIABLE)
                       OUTPUT_STRIP_TRAILING_WHITESPACE
                       ERROR_QUIET)
 
-      execute_process(COMMAND git describe --tags --match *-rc --abbrev=0
+      execute_process(COMMAND git describe --tags --match *-rc --abbrev=0 "${GIT_NEWEST_COMMIT}"
                       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                       OUTPUT_VARIABLE GIT_TAG
                       OUTPUT_STRIP_TRAILING_WHITESPACE)
   else()
-      execute_process(COMMAND git describe --tags --match *-dev --abbrev=0
+      execute_process(COMMAND git describe --tags --match *-dev --abbrev=0 "${GIT_NEWEST_COMMIT}"
                       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                       OUTPUT_VARIABLE GIT_TAG
                       OUTPUT_STRIP_TRAILING_WHITESPACE)
