@@ -15,20 +15,20 @@
  *
  */
 
-#ifndef MULTIPASS_PLATFORM_SHARED_H
-#define MULTIPASS_PLATFORM_SHARED_H
+#include "syslog_logger.h"
+#include <syslog.h>
 
-#include <string>
-#include <unordered_set>
+namespace mpl = multipass::logging;
 
-#include <QString>
-
-namespace multipass::platform
+mpl::SyslogLogger::SyslogLogger(mpl::Level level) : LinuxLogger{level}
 {
-const std::unordered_set<std::string> supported_snapcraft_aliases{"core18", "18.04", "core20", "20.04",
-                                                                  "core22", "22.04", "devel"};
+    openlog("multipass", LOG_CONS | LOG_PID, LOG_USER);
+}
 
-QString interpret_hotkey(const QString& val);
-} // namespace multipass::platform
-
-#endif // MULTIPASS_PLATFORM_SHARED_H
+void mpl::SyslogLogger::log(mpl::Level level, CString category, CString message) const
+{
+    if (level <= logging_level)
+    {
+        syslog(to_syslog_priority(level), "[%s] %s", category.c_str(), message.c_str());
+    }
+}

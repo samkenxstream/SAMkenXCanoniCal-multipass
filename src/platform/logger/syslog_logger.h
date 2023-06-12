@@ -15,20 +15,21 @@
  *
  */
 
-#ifndef MULTIPASS_PLATFORM_SHARED_H
-#define MULTIPASS_PLATFORM_SHARED_H
+#ifndef MULTIPASS_SYSLOG_LOGGER_H
+#define MULTIPASS_SYSLOG_LOGGER_H
 
-#include <string>
-#include <unordered_set>
+#include "linux_logger.h"
 
-#include <QString>
-
-namespace multipass::platform
+namespace multipass
 {
-const std::unordered_set<std::string> supported_snapcraft_aliases{"core18", "18.04", "core20", "20.04",
-                                                                  "core22", "22.04", "devel"};
-
-QString interpret_hotkey(const QString& val);
-} // namespace multipass::platform
-
-#endif // MULTIPASS_PLATFORM_SHARED_H
+namespace logging
+{
+class SyslogLogger : public LinuxLogger
+{
+public:
+    explicit SyslogLogger(Level level);
+    void log(Level level, CString category, CString message) const override;
+};
+} // namespace logging
+} // namespace multipass
+#endif // MULTIPASS_SYSLOG_LOGGER_H

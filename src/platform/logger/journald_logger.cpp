@@ -18,32 +18,11 @@
 #include "journald_logger.h"
 
 #define SD_JOURNAL_SUPPRESS_LOCATION
-#include <syslog.h>
 #include <systemd/sd-journal.h>
 
 namespace mpl = multipass::logging;
 
-namespace
-{
-constexpr auto to_syslog_priority(const mpl::Level& level) noexcept
-{
-    switch (level)
-    {
-    case mpl::Level::trace:
-    case mpl::Level::debug:
-        return LOG_DEBUG;
-    case mpl::Level::error:
-        return LOG_ERR;
-    case mpl::Level::info:
-        return LOG_INFO;
-    case mpl::Level::warning:
-        return LOG_WARNING;
-    }
-    return 42;
-}
-} // namespace
-
-mpl::JournaldLogger::JournaldLogger(mpl::Level level) : Logger{level}
+mpl::JournaldLogger::JournaldLogger(mpl::Level level) : LinuxLogger{level}
 {
 }
 
